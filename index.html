@@ -12,6 +12,47 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="סידור עבודה">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- OneSignal Push Notifications -->
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+window.OneSignalDeferred = window.OneSignalDeferred || [];
+OneSignalDeferred.push(async function(OneSignal) {
+  try {
+    await OneSignal.init({
+      appId: "65457f7b-39d8-49cb-b69f-427ac0e522a5",
+      serviceWorkerPath: "OneSignalSDKWorker.js",
+      serviceWorkerParam: { scope: "./" },
+      allowLocalhostAsSecureOrigin: true
+    });
+    window._oneSignalReady = true;
+  } catch(e) { console.log('OneSignal init error:', e); }
+});
+
+// Link the logged-in user to this device so we can send them targeted notifications
+async function osLinkUser(user){
+  if(!window.OneSignalDeferred) return;
+  OneSignalDeferred.push(async function(OneSignal){
+    try{
+      // ask permission (first time) then tag the device with the user's identity
+      await OneSignal.Notifications.requestPermission();
+      await OneSignal.login(String(user.id) + '_' + user.role);
+      await OneSignal.User.addTags({
+        uid: String(user.id),
+        role: user.role,
+        uname: user.username || '',
+        name: user.name || '',
+        etype: user.type || ''
+      });
+    }catch(e){ console.log('OneSignal link error:', e); }
+  });
+}
+async function osLogoutUser(){
+  if(!window.OneSignalDeferred) return;
+  OneSignalDeferred.push(async function(OneSignal){
+    try{ await OneSignal.logout(); }catch(e){}
+  });
+}
+</script>
 <style>
 :root{
   --bg:#f1f1f6;--surface:#fff;--surface2:#f7f7fb;--border:#e4e4ec;
@@ -1027,10 +1068,12 @@ async function doLogin(){
   ST.user=f;
   gi('loginScreen').style.display='none';
   gi('app').style.display='flex';
+  osLinkUser(f);
   await reloadData();
   buildNav();renderTab(f.role==='employee'?'myview':'sched');
 }
 function doLogout(){
+  osLogoutUser();
   ST.user=null;
   gi('loginScreen').style.display='flex';
   gi('app').style.display='none';
@@ -1054,7 +1097,8 @@ var NAV_ICONS={
   swapreqs:'<path d="M4.5 7.5h9.5M14 7.5l-2.6-2.6M14 7.5l-2.6 2.6"/><path d="M15.5 12.5H6M6 12.5l2.6-2.6M6 12.5l2.6 2.6"/>',
   meetings:'<path d="M7 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM13 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM3 16v-1a3 3 0 0 1 3-3h2a3 3 0 0 1 3 3v1M11 16v-1a3 3 0 0 1 3-3h1a3 3 0 0 1 3 3v1"/>',
   events:'<path d="M3 5.5h14v11H3zM3 8.5h14M7 3v3M13 3v3M6.5 12l1.3 1.3L11 10.5"/>',
-  sick:'<path d="M10 2.5a2 2 0 0 0-2 2v3.5H4.5a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2H8v3.5a2 2 0 0 0 2 2v0a2 2 0 0 0 2-2V14h3.5a2 2 0 0 0 2-2v0a2 2 0 0 0-2-2H12V4.5a2 2 0 0 0-2-2Z"/>'
+  sick:'<path d="M10 2.5a2 2 0 0 0-2 2v3.5H4.5a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2H8v3.5a2 2 0 0 0 2 2v0a2 2 0 0 0 2-2V14h3.5a2 2 0 0 0 2-2v0a2 2 0 0 0-2-2H12V4.5a2 2 0 0 0-2-2Z"/>',
+  notify:'<path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3-1.5 4.5-1.5 4.5h12s-1.5-1.5-1.5-4.5A4.5 4.5 0 0 0 10 3ZM8.5 15.5a1.5 1.5 0 0 0 3 0"/>'
 };
 function navIcon(id){var p=NAV_ICONS[id];return p?'<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">'+p+'</svg>':'';}
 function buildNav(){
@@ -1065,6 +1109,7 @@ function buildNav(){
   if(u.role==='superAdmin')tabs.push({id:'template',lbl:'סידור קבוע'});
   if(u.role!=='employee')tabs.push({id:'empview',lbl:'לפי עובד'});
   if(isAdmin())tabs.push({id:'reqsheet',lbl:'טופס עובדים'});
+  if(isAdmin())tabs.push({id:'notify',lbl:'שליחת התראה'});
   if(isAdmin())tabs.push({id:'sick',lbl:'מחלות'});
   if(isAdmin())tabs.push({id:'meetings',lbl:'ישיבות והדרכות'});
   if(isAdmin()){var pend=(ST.swapReqs||[]).filter(r=>r.status==='pending_admin').length;tabs.push({id:'swapreqs',lbl:'בקשות החלפה'+(pend?' '+'<span style="background:#dc2626;color:#fff;border-radius:10px;padding:0 6px;font-size:10px;font-weight:900;margin-inline-start:3px;">'+pend+'</span>':'')});}
@@ -1077,7 +1122,7 @@ function buildNav(){
   gi('mainNav').innerHTML=tabs.map(t=>`<button class="nav-btn${ST.tab===t.id?' active':''}" onclick="renderTab('${t.id}')">${navIcon(t.id)}<span>${t.lbl}</span></button>`).join('');
 }
 function renderTab(t){ST.tab=t;buildNav();var c=gi('mainContent');
-  ({sched:renderSched,empview:renderEmpView,cons:renderConsTab,employees:renderEmployees,users:renderUsers,myview:renderMyView,settings:renderSettings,logs:renderLogs,template:renderTemplate,reqsheet:renderReqSheet,sendreq:renderSendReq,swapreqs:renderSwapReqs,meetings:renderMeetings,sick:renderSick}[t]||renderSched)(c);}
+  ({sched:renderSched,empview:renderEmpView,cons:renderConsTab,employees:renderEmployees,users:renderUsers,myview:renderMyView,settings:renderSettings,logs:renderLogs,template:renderTemplate,reqsheet:renderReqSheet,sendreq:renderSendReq,swapreqs:renderSwapReqs,meetings:renderMeetings,sick:renderSick,notify:renderNotify}[t]||renderSched)(c);}
 
 // Re-render the schedule while preserving scroll position (page + each day-grid horizontal scroll)
 function rerenderSchedKeepScroll(){
@@ -1284,6 +1329,27 @@ async function setPub(wk,mode,val){
   ST.published[pubKey(wk,mode)]=val;
   if(val){try{await sbUpsert('published',{week_offset:wk,mode:mode},'week_offset,mode');}catch(e){console.error(e);}}
   else{try{await sbDel('published','week_offset=eq.'+wk+'&mode=eq.'+mode);}catch(e){console.error(e);}}
+  if(val){
+    // notify all employees that the schedule was published
+    var modeLbl=(mode==='toller'?'טולרים':'סיירים');
+    sendNotify({
+      target:'all',
+      title:'📅 הסידור פורסם',
+      message:'סידור ה'+modeLbl+' ל'+weekLabelFull(wk)+' פורסם. היכנס לראות את המשמרות שלך.'
+    });
+  }
+}
+
+// Send a push notification via OneSignal REST (through Supabase edge function notify-custom)
+async function sendNotify(opts){
+  // opts: {target:'all'|'toller'|'patrol'|'admins', title, message}
+  try{
+    await fetch(SB_URL+'/functions/v1/notify-custom',{
+      method:'POST',mode:'cors',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
+      body:JSON.stringify(opts)
+    });
+  }catch(e){console.error('notify error',e);}
 }
 
 // ── CONSTRAINTS ──
@@ -2741,6 +2807,43 @@ async function sendSwapReq(idx,theirMode,theirPlaza,theirDi,theirSid,theirEmpId)
   }catch(e){alert('שגיאה: '+e.message);}
 }
 
+// ── ADMIN: MANUAL PUSH NOTIFICATION (שליחת התראה) ──
+function renderNotify(c){
+  c.innerHTML=`
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:6px;">📢 שליחת התראה</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">שלח התראה לטלפונים של העובדים (למי שהתקין את האפליקציה ואישר התראות).</p>
+    <div style="background:rgba(255,255,255,0.55);border:1px solid var(--glass-stroke);border-radius:16px;padding:18px;max-width:560px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:var(--glass-shadow);">
+      <div style="font-size:12px;font-weight:800;color:var(--muted);margin-bottom:4px;">למי לשלוח</div>
+      <select id="ntfTarget" style="width:100%;padding:10px 11px;border-radius:10px;font-size:14px;margin-bottom:14px;">
+        <option value="all">כל העובדים</option>
+        <option value="toller">טולרים בלבד</option>
+        <option value="patrol">סיירים בלבד</option>
+        <option value="admins">אחראי סידור ומנהלים</option>
+      </select>
+      <div style="font-size:12px;font-weight:800;color:var(--muted);margin-bottom:4px;">כותרת</div>
+      <input id="ntfTitle" placeholder="לדוגמה: עדכון חשוב" style="width:100%;padding:10px 11px;border-radius:10px;font-size:14px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:800;color:var(--muted);margin-bottom:4px;">תוכן ההודעה</div>
+      <textarea id="ntfBody" rows="3" placeholder="כתוב כאן את ההודעה..." style="width:100%;padding:10px 11px;border-radius:10px;font-size:14px;margin-bottom:16px;resize:vertical;font-family:inherit;"></textarea>
+      <button class="btn btn-primary" onclick="sendManualNotify()">📤 שלח התראה</button>
+      <div id="ntfStatus" style="margin-top:12px;font-size:13px;"></div>
+    </div>`;
+}
+async function sendManualNotify(){
+  var target=gi('ntfTarget').value;
+  var title=gv('ntfTitle').trim();
+  var body=gv('ntfBody').trim();
+  if(!title||!body){alert('מלא כותרת ותוכן');return;}
+  gi('ntfStatus').innerHTML='<span style="color:var(--muted);">שולח...</span>';
+  try{
+    await sendNotify({target:target,title:title,message:body});
+    gi('ntfStatus').innerHTML='<span style="color:#0e9f6e;font-weight:700;">✅ ההתראה נשלחה</span>';
+    logAction('שליחת התראה ידנית',title,'יעד: '+target);
+    gi('ntfTitle').value='';gi('ntfBody').value='';
+  }catch(e){
+    gi('ntfStatus').innerHTML='<span style="color:#dc2626;font-weight:700;">שגיאה בשליחה</span>';
+  }
+}
+
 // ── ADMIN: SICK LEAVE (מחלות) ──
 function renderSick(c){
   var list=(ST.sick||[]).slice().sort((a,b)=>(b.from||'').localeCompare(a.from||''));
@@ -3328,14 +3431,9 @@ function startApp(){
 setTimeout(startApp,100);
 </script>
 <script>
-// PWA — רישום service worker (מאפשר התקנה למסך הבית)
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js').catch(function (err) {
-      console.log('SW registration failed:', err);
-    });
-  });
-}
+// PWA installability is provided via manifest.json + apple-touch-icon.
+// The service worker is OneSignal's (registered by the OneSignal SDK above),
+// so we do NOT register a second service worker here to avoid scope conflicts.
 </script>
 </body>
 </html>
