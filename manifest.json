@@ -1,0 +1,18 @@
+{
+  "name": "סידור עבודה — מנהרות הכרמל",
+  "short_name": "סידור עבודה",
+  "description": "מערכת ניהול משמרות — Manpower TBO · מנהרות הכרמל",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#28547e",
+  "theme_color": "#28547e",
+  "lang": "he",
+  "dir": "rtl",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
