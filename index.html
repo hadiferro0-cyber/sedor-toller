@@ -846,6 +846,27 @@ function appConfirm(message,title){
     ov.addEventListener('click',function(e){if(e.target===ov)done(false);});
   });
 }
+function appPrompt(message,defaultVal,title){
+  return new Promise(function(resolve){
+    var ov=document.createElement('div');
+    ov.className='app-dialog-bg';
+    ov.innerHTML='<div class="app-dialog">'+
+      (title?'<div class="app-dialog-title">'+title+'</div>':'')+
+      '<div class="app-dialog-msg">'+String(message).replace(/\n/g,'<br>')+'</div>'+
+      '<input class="app-dialog-input" type="text" value="'+String(defaultVal||'').replace(/"/g,'&quot;')+'" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--glass-border);font-size:15px;margin-bottom:14px;">'+
+      '<div class="app-dialog-btns">'+
+        '<button class="btn btn-ghost app-dialog-cancel">ביטול</button>'+
+        '<button class="btn btn-primary app-dialog-ok">אישור</button>'+
+      '</div></div>';
+    document.body.appendChild(ov);
+    var inp=ov.querySelector('.app-dialog-input');
+    setTimeout(function(){try{inp.focus();}catch(e){}},50);
+    function done(v){ov.remove();resolve(v);}
+    ov.querySelector('.app-dialog-ok').onclick=function(){done(inp.value);};
+    ov.querySelector('.app-dialog-cancel').onclick=function(){done(null);};
+    ov.addEventListener('click',function(e){if(e.target===ov)done(null);});
+  });
+}
 
 var SB_URL='https://fvdbosumbliaqcilqrqk.supabase.co';
 var SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2ZGJvc3VtYmxpYXFjaWxxcnFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMDM4MzIsImV4cCI6MjA5NTg3OTgzMn0.EHKVRA5vTbCT_yWnZP5zoJ0XGWrmjjRvhO8TF0aL8II';
@@ -1455,19 +1476,37 @@ async function setPub(wk,mode,val){
 }
 
 // Send a push notification via OneSignal REST (through Supabase edge function notify-custom)
+var OS_APP_ID='65457f7b-39d8-49cb-b69f-427ac0e522a5';
+var OS_REST_KEY='os_v2_app_mvcx66zz3be4xnu7ij5mbzjcuuqchdypo3ougheou7dx63ptjlpazd62uq6xhfyrrm5fu2cbjnbvfepkidx7yaueiiyjixx4gkwb3bi';
+function osTargeting(target){
+  if(target==='toller')return{filters:[{field:'tag',key:'etype',relation:'=',value:'toller'},{operator:'OR'},{field:'tag',key:'etype',relation:'=',value:'both'}]};
+  if(target==='patrol')return{filters:[{field:'tag',key:'etype',relation:'=',value:'patrol'},{operator:'OR'},{field:'tag',key:'etype',relation:'=',value:'both'}]};
+  if(target==='admins')return{filters:[{field:'tag',key:'role',relation:'=',value:'scheduler'},{operator:'OR'},{field:'tag',key:'role',relation:'=',value:'superAdmin'}]};
+  if(target&&target.uid!==undefined)return{filters:[{field:'tag',key:'uid',relation:'=',value:String(target.uid)}]};
+  return{included_segments:['Subscribed Users']};
+}
 function sendNotify(opts){
-  // opts: {target:'all'|'toller'|'patrol'|'admins', title, message}
-  // Fire-and-forget: must NEVER block or freeze the calling flow.
+  // opts: {target:'all'|'toller'|'patrol'|'admins'|{uid:N}, title, message}
+  // Sends DIRECTLY to OneSignal (bypasses Supabase). Fire-and-forget.
   try{
-    var ctrl = new AbortController();
-    var t = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 4000);
-    fetch(SB_URL+'/functions/v1/notify-custom',{
+    var tgt=osTargeting(opts.target);
+    var body=Object.assign({
+      app_id:OS_APP_ID,
+      headings:{en:opts.title,he:opts.title},
+      contents:{en:opts.message,he:opts.message},
+      url:'https://hadiferro0-cyber.github.io/sedor-toller/'
+    },tgt);
+    var ctrl=new AbortController();
+    var t=setTimeout(function(){try{ctrl.abort();}catch(e){}},6000);
+    fetch('https://api.onesignal.com/notifications',{
       method:'POST',mode:'cors',signal:ctrl.signal,
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
-      body:JSON.stringify(opts)
-    }).then(function(){clearTimeout(t);}).catch(function(e){clearTimeout(t);console.log('notify skipped',e&&e.message);});
+      headers:{'Content-Type':'application/json; charset=utf-8','Authorization':'Key '+OS_REST_KEY},
+      body:JSON.stringify(body)
+    }).then(function(r){clearTimeout(t);return r.json();})
+      .then(function(d){console.log('notify result',d);})
+      .catch(function(e){clearTimeout(t);console.log('notify skipped',e&&e.message);});
   }catch(e){console.log('notify error',e);}
-  return Promise.resolve(); // resolve immediately so callers never wait
+  return Promise.resolve();
 }
 
 // ── CONSTRAINTS ──
@@ -2701,6 +2740,7 @@ async function peerApprove(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'pending_admin'});
     r.status='pending_admin';
     logAction('בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' אושרה ע"י עובד',r.toName,r.fromName+' → '+r.toName);
+    sendNotify({target:'admins',title:'בקשה ממתינה לאישורך',message:'בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' בין '+r.fromName+' ל'+r.toName+' מחכה לאישור.'});
     await appAlert('✅ אישרת. הבקשה הועברה לאחראי הסידור.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2712,6 +2752,7 @@ async function peerReject(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'rejected',reject_reason:'נדחה ע"י העובד'});
     r.status='rejected';
     logAction('בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' נדחתה ע"י עובד',r.toName,r.fromName+' → '+r.toName);
+    sendNotify({target:{uid:r.fromId},title:'הבקשה נדחתה',message:r.toName+' דחה/תה את בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+'.'});
     await appAlert('הבקשה נדחתה.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2769,6 +2810,7 @@ async function sendTransferReq(idx,toEmpId){
     var res=await sbPost('swap_requests',row);
     ST.swapReqs.unshift(mapSwapReq(res[0]));
     logAction('בקשת מסירה נשלחה',myEmp.name+' → '+toEmp.name,row.a_label);
+    sendNotify({target:{uid:toEmp.id},title:'בקשת מסירה חדשה',message:myEmp.name+' שלח/ה לך בקשת מסירה. היכנס לאשר או לדחות.'});
     await appAlert('✅ הבקשה נשלחה ל'+toEmp.name+'. ממתינה לאישורו.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2920,6 +2962,7 @@ async function sendSwapReq(idx,theirMode,theirPlaza,theirDi,theirSid,theirEmpId)
     var res=await sbPost('swap_requests',row);
     ST.swapReqs.unshift(mapSwapReq(res[0]));
     logAction('בקשת החלפה נשלחה',myEmp.name+' ↔ '+theirEmp.name,row.a_label+' ⇄ '+row.b_label);
+    sendNotify({target:{uid:theirEmp.id},title:'בקשת החלפה חדשה',message:myEmp.name+' שלח/ה לך בקשת החלפה. היכנס לאשר או לדחות.'});
     await appAlert('✅ הבקשה נשלחה ל'+theirEmp.name+'. ממתינה לאישורו.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -3519,6 +3562,8 @@ async function adminApproveSwap(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'approved',decided_by:adminName});
     r.status='approved';r.decidedBy=adminName;
     logAction((r.kind==='swap'?'החלפה':'מסירה')+' אושרה ובוצעה',r.fromName+(r.kind==='swap'?' ↔ ':' → ')+r.toName,r.aLabel);
+    sendNotify({target:{uid:r.fromId},title:'הבקשה אושרה ✅',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך אושרה ובוצעה בסידור.'});
+    if(r.kind==='swap')sendNotify({target:{uid:r.toId},title:'החלפה בוצעה ✅',message:'ההחלפה עם '+r.fromName+' אושרה ובוצעה בסידור.'});
     await appAlert('✅ הבקשה אושרה והשינוי בוצע בסידור.');
     renderTab('swapreqs');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -3527,7 +3572,7 @@ async function adminRejectSwap(reqId,presetReason,silent){
   var r=ST.swapReqs.find(x=>x.id===reqId);if(!r)return;
   var reason=presetReason;
   if(!silent){
-    reason=prompt('סיבת הדחייה (אפשר להשאיר ריק):','');
+    reason=await appPrompt('סיבת הדחייה (אפשר להשאיר ריק):','');
     if(reason===null)return; // cancelled
   }
   try{
@@ -3535,6 +3580,7 @@ async function adminRejectSwap(reqId,presetReason,silent){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'rejected',reject_reason:reason||'נדחה ע"י אחראי הסידור',decided_by:silent?'המערכת':adminName2});
     r.status='rejected';r.reason=reason||'נדחה ע"י אחראי הסידור';r.decidedBy=silent?'המערכת':adminName2;
     logAction((r.kind==='swap'?'החלפה':'מסירה')+' נדחתה ע"י אחראי',r.fromName,r.reason);
+    if(!silent)sendNotify({target:{uid:r.fromId},title:'הבקשה נדחתה',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך נדחתה'+(reason?' — '+reason:'')+'.'});
     if(!silent){await appAlert('הבקשה נדחתה.');renderTab('swapreqs');}
   }catch(e){await appAlert('שגיאה: '+e.message);}
 }
