@@ -38,21 +38,23 @@ async function osLinkUser(user){
   _osLinkedFor = String(user.id)+'_'+user.role;
   OneSignalDeferred.push(async function(OneSignal){
     try{
-      // 1) make sure we have permission (safe to call; resolves quickly if already granted)
+      // 1) make sure we have permission
       try{ await OneSignal.Notifications.requestPermission(); }catch(e){}
-      // 2) explicitly opt the push subscription IN (this is what makes "recipients" exist)
+      // 2) opt the push subscription IN
       try{ await OneSignal.User.PushSubscription.optIn(); }catch(e){}
-      // 3) set tags with retries (the identity/subscription needs time to settle → avoids 409)
+      // 3) set External ID (this works reliably and is how we target users)
+      try{ await OneSignal.login(String(user.id) + '_' + user.role); }catch(e){}
+      // 4) also set tags (best-effort, with retries) for group targeting
       var tags={uid:String(user.id),role:user.role,uname:user.username||'',name:user.name||'',etype:user.type||''};
       var attempts=0;
       function trySetTags(){
         attempts++;
         try{
           var p=OneSignal.User.addTags(tags);
-          if(p&&p.then){ p.then(function(){console.log('tags set ok');}).catch(function(e){ if(attempts<5){setTimeout(trySetTags,4000);} }); }
-        }catch(e){ if(attempts<5){setTimeout(trySetTags,4000);} }
+          if(p&&p.then){ p.then(function(){console.log('tags ok');}).catch(function(e){ if(attempts<4){setTimeout(trySetTags,5000);} }); }
+        }catch(e){ if(attempts<4){setTimeout(trySetTags,5000);} }
       }
-      setTimeout(trySetTags, 4000);
+      setTimeout(trySetTags, 5000);
       refreshNotifyBtn();
     }catch(e){ console.log('OneSignal link error:', e); }
   });
@@ -2670,7 +2672,7 @@ function renderMyView(c){
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
     </div>
-    <div id="incomingReqs">${incomingReqsHTML(empRec)}</div>
+    <div id="incomingReqs">${incomingReqsHTML(empRec,wk)}${otherWeekReqsHint(empRec,wk)}</div>
     <div id="myEvents">${myEventsHTML(empRec,wk)}</div>
     <div id="myShiftCards">${cards}</div>`;
   window._myShifts=myShifts;window._myEmp=empRec;
@@ -2705,9 +2707,9 @@ function myEventsHTML(empRec,wk){
 }
 
 // Requests waiting for THIS employee to approve (they are the "to" side, status pending_peer)
-function incomingReqsHTML(empRec){
+function incomingReqsHTML(empRec,wk){
   if(!empRec)return'';
-  var mine=(ST.swapReqs||[]).filter(r=>r.toId===empRec.id&&r.status==='pending_peer');
+  var mine=(ST.swapReqs||[]).filter(r=>r.toId===empRec.id&&r.status==='pending_peer'&&r.aWk===wk);
   if(!mine.length)return'';
   return `<div style="margin-bottom:16px;border:2px solid var(--mp-maroon);border-radius:14px;padding:14px 16px;background:rgba(255,255,255,0.5);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);">
     <div style="font-weight:900;font-size:15px;color:var(--mp-maroon);margin-bottom:10px;">🔔 בקשות שממתינות לאישורך (${mine.length})</div>
@@ -2741,7 +2743,7 @@ async function peerReject(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'rejected',reject_reason:'נדחה ע"י העובד'});
     r.status='rejected';
     logAction('בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' נדחתה ע"י עובד',r.toName,r.fromName+' → '+r.toName);
-    sendNotify({target:{uid:r.fromId},title:'הבקשה נדחתה',message:r.toName+' דחה/תה את בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+'.'});
+    sendNotify({target:{extId:r.fromId+'_employee'},title:'הבקשה נדחתה',message:r.toName+' דחה/תה את בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+'.'});
     await appAlert('הבקשה נדחתה.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2799,7 +2801,7 @@ async function sendTransferReq(idx,toEmpId){
     var res=await sbPost('swap_requests',row);
     ST.swapReqs.unshift(mapSwapReq(res[0]));
     logAction('בקשת מסירה נשלחה',myEmp.name+' → '+toEmp.name,row.a_label);
-    sendNotify({target:{uid:toEmp.id},title:'בקשת מסירה חדשה',message:myEmp.name+' שלח/ה לך בקשת מסירה. היכנס לאשר או לדחות.'});
+    sendNotify({target:{extId:toEmp.id+'_employee'},title:'בקשת מסירה חדשה',message:myEmp.name+' שלח/ה לך בקשת מסירה. היכנס לאשר או לדחות.'});
     await appAlert('✅ הבקשה נשלחה ל'+toEmp.name+'. ממתינה לאישורו.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2951,7 +2953,7 @@ async function sendSwapReq(idx,theirMode,theirPlaza,theirDi,theirSid,theirEmpId)
     var res=await sbPost('swap_requests',row);
     ST.swapReqs.unshift(mapSwapReq(res[0]));
     logAction('בקשת החלפה נשלחה',myEmp.name+' ↔ '+theirEmp.name,row.a_label+' ⇄ '+row.b_label);
-    sendNotify({target:{uid:theirEmp.id},title:'בקשת החלפה חדשה',message:myEmp.name+' שלח/ה לך בקשת החלפה. היכנס לאשר או לדחות.'});
+    sendNotify({target:{extId:theirEmp.id+'_employee'},title:'בקשת החלפה חדשה',message:myEmp.name+' שלח/ה לך בקשת החלפה. היכנס לאשר או לדחות.'});
     await appAlert('✅ הבקשה נשלחה ל'+theirEmp.name+'. ממתינה לאישורו.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -3551,8 +3553,8 @@ async function adminApproveSwap(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'approved',decided_by:adminName});
     r.status='approved';r.decidedBy=adminName;
     logAction((r.kind==='swap'?'החלפה':'מסירה')+' אושרה ובוצעה',r.fromName+(r.kind==='swap'?' ↔ ':' → ')+r.toName,r.aLabel);
-    sendNotify({target:{uid:r.fromId},title:'הבקשה אושרה ✅',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך אושרה ובוצעה בסידור.'});
-    if(r.kind==='swap')sendNotify({target:{uid:r.toId},title:'החלפה בוצעה ✅',message:'ההחלפה עם '+r.fromName+' אושרה ובוצעה בסידור.'});
+    sendNotify({target:{extId:r.fromId+'_employee'},title:'הבקשה אושרה ✅',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך אושרה ובוצעה בסידור.'});
+    if(r.kind==='swap')sendNotify({target:{extId:r.toId+'_employee'},title:'החלפה בוצעה ✅',message:'ההחלפה עם '+r.fromName+' אושרה ובוצעה בסידור.'});
     await appAlert('✅ הבקשה אושרה והשינוי בוצע בסידור.');
     renderTab('swapreqs');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -3569,7 +3571,7 @@ async function adminRejectSwap(reqId,presetReason,silent){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'rejected',reject_reason:reason||'נדחה ע"י אחראי הסידור',decided_by:silent?'המערכת':adminName2});
     r.status='rejected';r.reason=reason||'נדחה ע"י אחראי הסידור';r.decidedBy=silent?'המערכת':adminName2;
     logAction((r.kind==='swap'?'החלפה':'מסירה')+' נדחתה ע"י אחראי',r.fromName,r.reason);
-    if(!silent)sendNotify({target:{uid:r.fromId},title:'הבקשה נדחתה',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך נדחתה'+(reason?' — '+reason:'')+'.'});
+    if(!silent)sendNotify({target:{extId:r.fromId+'_employee'},title:'הבקשה נדחתה',message:'בקשת ה'+(r.kind==='swap'?'החלפה':'מסירה')+' שלך נדחתה'+(reason?' — '+reason:'')+'.'});
     if(!silent){await appAlert('הבקשה נדחתה.');renderTab('swapreqs');}
   }catch(e){await appAlert('שגיאה: '+e.message);}
 }
