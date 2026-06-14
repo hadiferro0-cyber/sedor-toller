@@ -1181,10 +1181,14 @@ async function doLogin(){
   var f=allUsers().find(x=>x.username===u&&x.password===p);
   if(!f){gi('loginErr').textContent='שם משתמש או סיסמה שגויים';return;}
   ST.user=f;
+  ST.tab=(f.role==='employee'?'myview':'sched'); // reset tab on every login
+  ST.selEmp=null;
   gi('loginScreen').style.display='none';
   gi('app').style.display='flex';
   osLinkUser(f);
-  await reloadData();
+  ST.weekOff=currentWeekOffset();
+  buildNav();renderTab(f.role==='employee'?'myview':'sched');
+  try{ await reloadData(); }catch(e){ console.log('reload error',e); }
   ST.weekOff=currentWeekOffset();
   buildNav();renderTab(f.role==='employee'?'myview':'sched');
 }
@@ -1237,8 +1241,14 @@ function buildNav(){
   if(u.role==='employee')tabs.push({id:'sendreq',lbl:'שליחת בקשות'});
   gi('mainNav').innerHTML=tabs.map(t=>`<button class="nav-btn${ST.tab===t.id?' active':''}" onclick="renderTab('${t.id}')">${navIcon(t.id)}<span>${t.lbl}</span></button>`).join('');
 }
-function renderTab(t){ST.tab=t;buildNav();var c=gi('mainContent');
-  ({sched:renderSched,empview:renderEmpView,cons:renderConsTab,employees:renderEmployees,users:renderUsers,myview:renderMyView,settings:renderSettings,logs:renderLogs,template:renderTemplate,reqsheet:renderReqSheet,sendreq:renderSendReq,swapreqs:renderSwapReqs,meetings:renderMeetings,sick:renderSick,notify:renderNotify}[t]||renderSched)(c);}
+function renderTab(t){
+  // Safety: employees must never land on admin-only tabs (prevents stale admin screen after user switch)
+  var empTabs=['myview','sendreq'];
+  if(ST.user && ST.user.role==='employee' && empTabs.indexOf(t)<0){ t='myview'; }
+  if(ST.user && ST.user.role!=='employee' && empTabs.indexOf(t)>=0){ t='sched'; }
+  ST.tab=t;buildNav();var c=gi('mainContent');
+  var fallback = (ST.user && ST.user.role==='employee') ? renderMyView : renderSched;
+  ({sched:renderSched,empview:renderEmpView,cons:renderConsTab,employees:renderEmployees,users:renderUsers,myview:renderMyView,settings:renderSettings,logs:renderLogs,template:renderTemplate,reqsheet:renderReqSheet,sendreq:renderSendReq,swapreqs:renderSwapReqs,meetings:renderMeetings,sick:renderSick,notify:renderNotify}[t]||fallback)(c);}
 
 // Re-render the schedule while preserving scroll position (page + each day-grid horizontal scroll)
 function rerenderSchedKeepScroll(){
@@ -2457,7 +2467,7 @@ function getMyRequest(empId,weekOff){
 function renderSendReq(c){
   var emp=ST.employees.find(function(e){return e.username===ST.user.username;});
   if(!emp){c.innerHTML='<div class="empty">לא נמצאת ברשימת העובדים</div>';return;}
-  var targetWeek=1; // next week
+  var targetWeek=currentWeekOffset()+1; // the week AFTER the current real week
   var closed=reqDeadlinePassed();
   var existing=getMyRequest(emp.id,targetWeek);
   var data=existing?existing.data:{};
@@ -2523,7 +2533,7 @@ function reqText(data){
   return parts.join(', ');
 }
 function renderReqSheet(c){
-  var targetWeek=1;
+  var targetWeek=currentWeekOffset()+1;
   function tableFor(list,title){
     list.sort(function(a,b){return a.name.localeCompare(b.name,'he');});
     var rows=list.map(function(emp,idx){
@@ -2672,7 +2682,7 @@ function renderMyView(c){
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
     </div>
-    <div id="incomingReqs">${incomingReqsHTML(empRec,wk)}${otherWeekReqsHint(empRec,wk)}</div>
+    <div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
     <div id="myEvents">${myEventsHTML(empRec,wk)}</div>
     <div id="myShiftCards">${cards}</div>`;
   window._myShifts=myShifts;window._myEmp=empRec;
@@ -2731,7 +2741,10 @@ async function peerApprove(reqId){
     await sbPatch('swap_requests','id=eq.'+reqId,{status:'pending_admin'});
     r.status='pending_admin';
     logAction('בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' אושרה ע"י עובד',r.toName,r.fromName+' → '+r.toName);
-    sendNotify({target:'admins',title:'בקשה ממתינה לאישורך',message:'בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' בין '+r.fromName+' ל'+r.toName+' מחכה לאישור.'});
+    // notify each admin by their External ID (tags are unreliable)
+    (ST.managers||[]).filter(m=>m.role==='superAdmin'||m.role==='scheduler').forEach(function(m){
+      sendNotify({target:{extId:m.id+'_'+m.role},title:'בקשה ממתינה לאישורך',message:'בקשת '+(r.kind==='swap'?'החלפה':'מסירה')+' בין '+r.fromName+' ל'+r.toName+' מחכה לאישור.'});
+    });
     await appAlert('✅ אישרת. הבקשה הועברה לאחראי הסידור.');
     renderTab('myview');
   }catch(e){await appAlert('שגיאה: '+e.message);}
