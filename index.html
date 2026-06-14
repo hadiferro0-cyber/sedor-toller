@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#28547e">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="סידור עבודה">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -20,8 +21,8 @@ OneSignalDeferred.push(async function(OneSignal) {
   try {
     await OneSignal.init({
       appId: "65457f7b-39d8-49cb-b69f-427ac0e522a5",
-      serviceWorkerPath: "OneSignalSDKWorker.js",
-      serviceWorkerParam: { scope: "./" },
+      serviceWorkerPath: "/sedor-toller/OneSignalSDKWorker.js",
+      serviceWorkerParam: { scope: "/sedor-toller/" },
       allowLocalhostAsSecureOrigin: true
     });
     window._oneSignalReady = true;
