@@ -31,21 +31,29 @@ OneSignalDeferred.push(async function(OneSignal) {
   } catch(e) { console.log('OneSignal init error:', e); }
 });
 
-// Link the logged-in user to this device (login + tags). Also tries to prompt.
+// Link the logged-in user to this device (permission → opt-in → login → tags).
 async function osLinkUser(user){
   if(!window.OneSignalDeferred) return;
   OneSignalDeferred.push(async function(OneSignal){
     try{
-      await OneSignal.login(String(user.id) + '_' + user.role);
-      await OneSignal.User.addTags({
-        uid: String(user.id),
-        role: user.role,
-        uname: user.username || '',
-        name: user.name || '',
-        etype: user.type || ''
-      });
-      // try to show the native prompt (works on Android/desktop; iOS needs the button tap)
+      // 1) make sure we have permission (safe to call; resolves quickly if already granted)
       try{ await OneSignal.Notifications.requestPermission(); }catch(e){}
+      // 2) explicitly opt the push subscription IN (this is what makes "recipients" exist)
+      try{ await OneSignal.User.PushSubscription.optIn(); }catch(e){}
+      // 3) identify the user
+      try{ await OneSignal.login(String(user.id) + '_' + user.role); }catch(e){}
+      // 4) set tags AFTER a short delay so the subscription/user is fully registered (avoids 409)
+      setTimeout(function(){
+        try{
+          OneSignal.User.addTags({
+            uid: String(user.id),
+            role: user.role,
+            uname: user.username || '',
+            name: user.name || '',
+            etype: user.type || ''
+          });
+        }catch(e){ console.log('addTags later error:', e); }
+      }, 2500);
       refreshNotifyBtn();
     }catch(e){ console.log('OneSignal link error:', e); }
   });
@@ -74,9 +82,13 @@ async function manualEnableNotify(){
   OneSignalDeferred.push(async function(OneSignal){
     try{
       await OneSignal.Notifications.requestPermission();
+      try{ await OneSignal.User.PushSubscription.optIn(); }catch(e){}
       if(window.ST && ST.user){
-        await OneSignal.login(String(ST.user.id)+'_'+ST.user.role);
-        await OneSignal.User.addTags({uid:String(ST.user.id),role:ST.user.role,uname:ST.user.username||'',name:ST.user.name||'',etype:ST.user.type||''});
+        try{ await OneSignal.login(String(ST.user.id)+'_'+ST.user.role); }catch(e){}
+        var u=ST.user;
+        setTimeout(function(){
+          try{ OneSignal.User.addTags({uid:String(u.id),role:u.role,uname:u.username||'',name:u.name||'',etype:u.type||''}); }catch(e){}
+        }, 2500);
       }
       refreshNotifyBtn();
       if(OneSignal.Notifications.permission){
