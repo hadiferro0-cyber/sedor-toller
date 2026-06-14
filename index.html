@@ -42,18 +42,17 @@ async function osLinkUser(user){
       try{ await OneSignal.Notifications.requestPermission(); }catch(e){}
       // 2) explicitly opt the push subscription IN (this is what makes "recipients" exist)
       try{ await OneSignal.User.PushSubscription.optIn(); }catch(e){}
-      // 3) set tags after a short delay so the subscription is fully registered (avoids 409)
-      setTimeout(function(){
+      // 3) set tags with retries (the identity/subscription needs time to settle → avoids 409)
+      var tags={uid:String(user.id),role:user.role,uname:user.username||'',name:user.name||'',etype:user.type||''};
+      var attempts=0;
+      function trySetTags(){
+        attempts++;
         try{
-          OneSignal.User.addTags({
-            uid: String(user.id),
-            role: user.role,
-            uname: user.username || '',
-            name: user.name || '',
-            etype: user.type || ''
-          });
-        }catch(e){ console.log('addTags later error:', e); }
-      }, 3000);
+          var p=OneSignal.User.addTags(tags);
+          if(p&&p.then){ p.then(function(){console.log('tags set ok');}).catch(function(e){ if(attempts<5){setTimeout(trySetTags,4000);} }); }
+        }catch(e){ if(attempts<5){setTimeout(trySetTags,4000);} }
+      }
+      setTimeout(trySetTags, 4000);
       refreshNotifyBtn();
     }catch(e){ console.log('OneSignal link error:', e); }
   });
