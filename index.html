@@ -1095,6 +1095,23 @@ async function loadAllData(){
       ST.sick=sk.map(mapSick);
     }catch(e){console.error('sick load',e);ST.sick=[];}
 
+    // Auto-login if a saved session exists (so users stay logged in between app opens)
+    var savedU=null;
+    try{ savedU=localStorage.getItem('sidur_user'); }catch(e){}
+    if(savedU){
+      var sf=allUsers().find(x=>x.username===savedU);
+      if(sf){
+        ST.user=sf;
+        ST.tab=(sf.role==='employee'?'myview':'sched');
+        ST.selEmp=null;
+        gi('loginScreen').style.display='none';
+        gi('app').style.display='flex';
+        osLinkUser(sf);
+        ST.weekOff=currentWeekOffset();
+        buildNav();renderTab(sf.role==='employee'?'myview':'sched');
+        return;
+      }
+    }
     gi('loginScreen').style.display='flex';
     gi('app').style.display='none';
   }catch(e){
@@ -1180,6 +1197,7 @@ async function doLogin(){
   }catch(e){}
   var f=allUsers().find(x=>x.username===u&&x.password===p);
   if(!f){gi('loginErr').textContent='שם משתמש או סיסמה שגויים';return;}
+  try{ localStorage.setItem('sidur_user', f.username); }catch(e){}
   ST.user=f;
   ST.tab=(f.role==='employee'?'myview':'sched'); // reset tab on every login
   ST.selEmp=null;
@@ -1193,6 +1211,7 @@ async function doLogin(){
   buildNav();renderTab(f.role==='employee'?'myview':'sched');
 }
 function doLogout(){
+  try{ localStorage.removeItem('sidur_user'); }catch(e){}
   osLogoutUser();
   ST.user=null;
   gi('loginScreen').style.display='flex';
