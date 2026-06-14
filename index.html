@@ -21,9 +21,6 @@ OneSignalDeferred.push(async function(OneSignal) {
   try {
     await OneSignal.init({
       appId: "65457f7b-39d8-49cb-b69f-427ac0e522a5",
-      serviceWorkerPath: "OneSignalSDKWorker.js",
-      serviceWorkerUpdaterPath: "OneSignalSDKWorker.js",
-      serviceWorkerParam: { scope: "/sedor-toller/" },
       allowLocalhostAsSecureOrigin: true
     });
     window._oneSignalReady = true;
