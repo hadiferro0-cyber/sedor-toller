@@ -33,8 +33,11 @@ OneSignalDeferred.push(async function(OneSignal) {
 });
 
 // Link the logged-in user to this device (permission → opt-in → login → tags).
+var _osLinkedFor = null;
 async function osLinkUser(user){
   if(!window.OneSignalDeferred) return;
+  if(_osLinkedFor === String(user.id)+'_'+user.role) return; // already linked this session
+  _osLinkedFor = String(user.id)+'_'+user.role;
   OneSignalDeferred.push(async function(OneSignal){
     try{
       // 1) make sure we have permission (safe to call; resolves quickly if already granted)
@@ -60,6 +63,7 @@ async function osLinkUser(user){
   });
 }
 async function osLogoutUser(){
+  _osLinkedFor = null;
   if(!window.OneSignalDeferred) return;
   OneSignalDeferred.push(async function(OneSignal){
     try{ await OneSignal.logout(); }catch(e){}
