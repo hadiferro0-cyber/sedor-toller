@@ -1487,21 +1487,14 @@ function osTargeting(target){
 }
 function sendNotify(opts){
   // opts: {target:'all'|'toller'|'patrol'|'admins'|{uid:N}, title, message}
-  // Sends DIRECTLY to OneSignal (bypasses Supabase). Fire-and-forget.
+  // Calls Supabase edge function (server-side sends to OneSignal). Fire-and-forget.
   try{
-    var tgt=osTargeting(opts.target);
-    var body=Object.assign({
-      app_id:OS_APP_ID,
-      headings:{en:opts.title,he:opts.title},
-      contents:{en:opts.message,he:opts.message},
-      url:'https://hadiferro0-cyber.github.io/sedor-toller/'
-    },tgt);
     var ctrl=new AbortController();
     var t=setTimeout(function(){try{ctrl.abort();}catch(e){}},6000);
-    fetch('https://api.onesignal.com/notifications',{
+    fetch(SB_URL+'/functions/v1/notify-custom',{
       method:'POST',mode:'cors',signal:ctrl.signal,
-      headers:{'Content-Type':'application/json; charset=utf-8','Authorization':'Key '+OS_REST_KEY},
-      body:JSON.stringify(body)
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+SB_KEY,'apikey':SB_KEY},
+      body:JSON.stringify(opts)
     }).then(function(r){clearTimeout(t);return r.json();})
       .then(function(d){console.log('notify result',d);})
       .catch(function(e){clearTimeout(t);console.log('notify skipped',e&&e.message);});
