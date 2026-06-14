@@ -1151,6 +1151,7 @@ async function doLogin(){
   gi('app').style.display='flex';
   osLinkUser(f);
   await reloadData();
+  ST.weekOff=currentWeekOffset();
   buildNav();renderTab(f.role==='employee'?'myview':'sched');
 }
 function doLogout(){
@@ -1227,7 +1228,23 @@ function rerenderSchedKeepScroll(){
 }
 
 // ── WEEK UTILS ──
-function weekStart(off){var d=new Date(),s=new Date(d);s.setDate(d.getDate()-d.getDay()+off*7);return s;}
+// IMPORTANT: weekOffset is anchored to a FIXED reference Sunday (7/6/2026),
+// NOT to today's date. This prevents schedules from "shifting" when the real
+// week changes. weekOffset 0 == week of 7/6/2026, permanently.
+var WEEK_EPOCH = new Date(2026, 5, 7); // 7 June 2026 (month 0-based: 5=June), a Sunday
+function weekStart(off){
+  var s=new Date(WEEK_EPOCH);
+  s.setDate(WEEK_EPOCH.getDate()+off*7);
+  s.setHours(0,0,0,0);
+  return s;
+}
+// Which offset corresponds to the real-world current week (for the "current" tag)
+function currentWeekOffset(){
+  var today=new Date(); today.setHours(0,0,0,0);
+  var sunday=new Date(today); sunday.setDate(today.getDate()-today.getDay());
+  var diffDays=Math.round((sunday-weekStart(0))/(1000*60*60*24));
+  return Math.round(diffDays/7);
+}
 function weekDates(off){var s=weekStart(off),r=[];for(var i=0;i<7;i++){var d=new Date(s);d.setDate(s.getDate()+i);r.push(d);}return r;}
 function fmtDate(d){return(d.getDate()+'').padStart(2,'0')+'/'+(d.getMonth()+1+'').padStart(2,'0');}
 function fmtDateY(d){return fmtDate(d)+'/'+d.getFullYear();}
@@ -1235,7 +1252,8 @@ function isoDate(d){return d.getFullYear()+'-'+(d.getMonth()+1+'').padStart(2,'0
 function weekLabel(off){var dd=weekDates(off);return fmtDate(dd[0])+' — '+fmtDate(dd[6]);}
 function weekLabelFull(off){var dd=weekDates(off);return fmtDateY(dd[0])+'  —  '+fmtDateY(dd[6]);}
 function weekHeaderHTML(off,returnTab,compact){
-  var isCur=(off===0);
+  var curOff=currentWeekOffset();
+  var isCur=(off===curOff);
   var pad=compact?'2px 10px':'4px 13px';
   var mb=compact?'3px':'7px';
   var fs=compact?'17px':'23px';
@@ -1243,7 +1261,7 @@ function weekHeaderHTML(off,returnTab,compact){
   var pillBase='display:inline-flex;align-items:center;gap:6px;font-size:'+pillFs+';font-weight:800;padding:'+pad+';border-radius:20px;margin-bottom:'+mb+';';
   var tag=isCur
     ?'<div style="'+pillBase+'background:#0e9f6e;color:#fff;"><span style="width:6px;height:6px;border-radius:50%;background:#fff;display:inline-block;"></span>שבוע נוכחי</div>'
-    :(off<0?'<div style="'+pillBase+'background:#ededf2;color:#6b6b78;">שבוע קודם</div>'
+    :(off<curOff?'<div style="'+pillBase+'background:#ededf2;color:#6b6b78;">שבוע קודם</div>'
             :'<div style="'+pillBase+'background:var(--accent-soft);color:var(--accent);">שבוע עתידי</div>');
   var icoSz=compact?'16':'19';
   var calIco='<svg viewBox="0 0 20 20" width="'+icoSz+'" height="'+icoSz+'" fill="none" stroke="var(--muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-start:8px;opacity:.55"><rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 2.5v4M13 2.5v4"/></svg>';
@@ -1279,7 +1297,7 @@ function openWeekPick(returnTab){
       html+='<div style="display:flex;flex-direction:column;gap:4px;margin-top:5px;">';
       byYear[yr].forEach(function(off){
         var sel=off===ST.weekOff;
-        var tag=off===0?' <span style="color:var(--accent);font-weight:800;">(השבוע)</span>':'';
+        var tag=off===currentWeekOffset()?' <span style="color:var(--accent);font-weight:800;">(השבוע)</span>':'';
         html+='<div onclick="pickWeek('+off+')" style="padding:10px 14px;border-radius:8px;cursor:pointer;border:1.5px solid '+(sel?'var(--accent)':'var(--border)')+';background:'+(sel?'#f3f1fb':'#fff')+';font-weight:'+(sel?'800':'600')+';font-size:14px;">📅 '+weekLabel(off)+tag+'</div>';
       });
       html+='</div>';
@@ -2561,7 +2579,7 @@ function renderMyView(c){
     c.innerHTML=`<div style="text-align:center;padding:48px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
-        <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===0?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
+        <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
       <div style="font-size:40px;margin-bottom:10px;">🔒</div>
@@ -2586,7 +2604,7 @@ function renderMyView(c){
     c.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
-        <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===0?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
+        <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
       <div style="font-size:32px;">😔</div><div style="margin-top:8px;font-weight:700;">אין משמרות לשבוע זה</div>
@@ -2605,7 +2623,7 @@ function renderMyView(c){
       <h2 style="font-size:18px;font-weight:800;">המשמרות שלי</h2>
       <div style="display:flex;gap:6px;">
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
-        <span style="font-size:17px;font-weight:900;padding:5px 8px;">${weekLabelFull(wk)}</span>${wk===0?'<span style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-right:6px;">✅ שבוע נוכחי</span>':''}
+        <span style="font-size:17px;font-weight:900;padding:5px 8px;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<span style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-right:6px;">✅ שבוע נוכחי</span>':''}
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
     </div>
@@ -3035,7 +3053,7 @@ function renderEventsInner(c){
     <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">הוסף אירוע (הדרכת בטיחות וכו') עם תאריך, שעה ומשתתפים. העובדים יראו אותו ב"המשמרות שלי". המערכת מתריעה אם יש התנגשות עם משמרת.</p>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;background:rgba(255,255,255,0.55);border:1px solid var(--glass-stroke);border-radius:14px;padding:8px 14px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:var(--glass-shadow);">
       <button class="btn btn-ghost btn-sm" onclick="_evWk--;renderTab('meetings')">◀ הקודם</button>
-      <div style="flex:1;text-align:center;font-weight:900;font-size:15px;">${weekLabelFull(wk)}${wk===0?' <span style="background:#0e9f6e;color:#fff;font-size:10px;padding:2px 8px;border-radius:20px;">נוכחי</span>':''}</div>
+      <div style="flex:1;text-align:center;font-weight:900;font-size:15px;">${weekLabelFull(wk)}${wk===currentWeekOffset()?' <span style="background:#0e9f6e;color:#fff;font-size:10px;padding:2px 8px;border-radius:20px;">נוכחי</span>':''}</div>
       <button class="btn btn-ghost btn-sm" onclick="_evWk++;renderTab('meetings')">הבא ▶</button>
     </div>
     ${weekEvents.length?weekEvents.map(ev=>eventCard(ev)).join(''):'<div class="empty">אין אירועים בשבוע זה</div>'}`;
@@ -3155,7 +3173,7 @@ function renderMeetings(c){
     <div style="background:rgba(255,255,255,0.55);border:1px solid var(--glass-stroke);border-radius:16px;padding:16px;margin-bottom:16px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:var(--glass-shadow);">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
         <button class="btn btn-ghost btn-sm" onclick="_meetWk--;_meetResult=null;renderTab('meetings')">◀ שבוע קודם</button>
-        <div style="flex:1;text-align:center;font-weight:900;font-size:15px;">${weekLabelFull(wk)}${wk===0?' <span style="background:#0e9f6e;color:#fff;font-size:10px;padding:2px 8px;border-radius:20px;">נוכחי</span>':''}</div>
+        <div style="flex:1;text-align:center;font-weight:900;font-size:15px;">${weekLabelFull(wk)}${wk===currentWeekOffset()?' <span style="background:#0e9f6e;color:#fff;font-size:10px;padding:2px 8px;border-radius:20px;">נוכחי</span>':''}</div>
         <button class="btn btn-ghost btn-sm" onclick="_meetWk++;_meetResult=null;renderTab('meetings')">שבוע הבא ▶</button>
       </div>
       <div style="font-size:12px;font-weight:800;color:var(--muted);margin-bottom:4px;">כותרת / סיבת הישיבה <span style="font-weight:400;">(יוצג לעובד)</span></div>
@@ -3445,7 +3463,7 @@ function renderSwapReqs(c){
     inner = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;background:rgba(255,255,255,0.55);border:1px solid var(--glass-stroke);border-radius:14px;padding:8px 14px;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:var(--glass-shadow);">
         <button class="btn btn-ghost btn-sm" onclick="_swapHistWk--;renderTab('swapreqs')">◀ הקודם</button>
         <div style="flex:1;text-align:center;">
-          ${wk===0?'<div style="display:inline-block;background:#0e9f6e;color:#fff;font-size:11px;font-weight:800;padding:2px 10px;border-radius:20px;margin-bottom:3px;">שבוע נוכחי</div>':''}
+          ${wk===currentWeekOffset()?'<div style="display:inline-block;background:#0e9f6e;color:#fff;font-size:11px;font-weight:800;padding:2px 10px;border-radius:20px;margin-bottom:3px;">שבוע נוכחי</div>':''}
           <div style="font-size:16px;font-weight:900;">${weekLabelFull(wk)}</div>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="_swapHistWk++;renderTab('swapreqs')">הבא ▶</button>
