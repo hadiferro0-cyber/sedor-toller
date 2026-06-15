@@ -865,6 +865,7 @@ function appPrompt(message,defaultVal,title){
     ov.addEventListener('click',function(e){if(e.target===ov)done(null);});
   });
 }
+function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 var SB_URL='https://fvdbosumbliaqcilqrqk.supabase.co';
 var SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2ZGJvc3VtYmxpYXFjaWxxcnFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMDM4MzIsImV4cCI6MjA5NTg3OTgzMn0.EHKVRA5vTbCT_yWnZP5zoJ0XGWrmjjRvhO8TF0aL8II';
@@ -1881,7 +1882,8 @@ function buildDayCol(plaza,wk,mode,di,date,psh,canEd){
     </div>`;
     var body;
     if(canceled){
-      body=`<div class="ssb-double">⏩ כפולה${canEd?` <button class="rmv" style="opacity:1;color:#fff;" onclick="toggleCancelShift(${wk},'${mode}','${plaza.key}',${di},'${sh.id}')" title="בטל סימון כפולה">↺</button>`:''}</div>`;
+      var cnote=cancelNote(wk,mode,plaza.key,di,sh.id);
+      body=`<div class="ssb-double">⏩ כפולה${canEd?` <button class="rmv" style="opacity:1;color:#fff;" onclick="editCancelNote(${wk},'${mode}','${plaza.key}',${di},'${sh.id}')" title="הערה — מי עושה את הכפולה">✎</button> <button class="rmv" style="opacity:1;color:#fff;" onclick="toggleCancelShift(${wk},'${mode}','${plaza.key}',${di},'${sh.id}')" title="בטל סימון כפולה">↺</button>`:''}</div>${cnote?`<div style="font-size:9px;color:#475569;font-weight:700;text-align:center;padding:2px 1px;line-height:1.3;">${escHtml(cnote)}</div>`:''}`;
     } else if(assignments.length){
       var dup=assignments.length>1;
       body=assignments.map(function(a){
@@ -1929,8 +1931,22 @@ async function toggleCancelShift(wk,mode,plaza,di,sid){
   try{await sbUpsert('settings',{key:'canceled',value:JSON.stringify(ST.canceled)},'key');}catch(e){console.error(e);}
   rerenderSchedKeepScroll();
 }
-
-function selEmpFn(id){ST.selEmp=ST.selEmp===id?null:id;rerenderSchedKeepScroll();}
+// Optional note on a "כפולה" slot (e.g. who covers it — "דני, סייר בוקר").
+// Stored as the value of ST.canceled[key]: true = no note, a string = the note.
+function cancelNote(wk,mode,plaza,di,sid){
+  var v=ST.canceled[cancelKey(wk,mode,plaza,di,sid)];
+  return (typeof v==='string')?v:'';
+}
+async function editCancelNote(wk,mode,plaza,di,sid){
+  var k=cancelKey(wk,mode,plaza,di,sid);
+  if(!ST.canceled[k])return; // only on a marked כפולה
+  var note=await appPrompt('הערה לכפולה — מי עושה אותה (למשל: דני, סייר בוקר):',cancelNote(wk,mode,plaza,di,sid));
+  if(note===null)return; // canceled
+  note=note.trim();
+  ST.canceled[k]=note?note:true;
+  try{await sbUpsert('settings',{key:'canceled',value:JSON.stringify(ST.canceled)},'key');}catch(e){console.error(e);}
+  rerenderSchedKeepScroll();
+}
 
 async function clickSlot(plaza,mode,di,sid){
   if(ST.selEmp){
