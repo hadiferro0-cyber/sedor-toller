@@ -1138,6 +1138,11 @@ async function reloadData(){
     try{var sreqs=await sbGet('swap_requests','select=*&order=created_at.desc');ST.swapReqs=sreqs.map(mapSwapReq);}catch(e){console.error('swapReqs reload',e);}
   }catch(e){console.error(e);}
 }
+// Re-pull data from Supabase then re-render current tab (used by the refresh button)
+async function reloadAndRerender(){
+  try{ await reloadData(); }catch(e){ console.error('reloadAndRerender',e); }
+  if(ST.tab) renderTab(ST.tab);
+}
 
 // status: pending_peer | pending_admin | approved | rejected
 function mapSwapReq(r){
@@ -1395,9 +1400,14 @@ async function logAction(action,emp_name,detail){
 async function addA(wk,mode,plaza,di,sid,emp){
   var k=sk(wk,mode,plaza,di,sid);
   if(!ST.sched[k])ST.sched[k]=[];
-  // check not already assigned
+  // already this exact employee in this slot? nothing to do
   if(ST.sched[k].find(x=>x.empId===emp.id))return;
   try{
+    // ONE employee per slot: REPLACE, never stack. Clear any existing occupant(s) for
+    // this exact slot from the DB first (also clears duplicates created on another device),
+    // then assign the new employee.
+    try{ await sbDel('assignments','week_offset=eq.'+wk+'&mode=eq.'+mode+'&plaza=eq.'+plaza+'&day_index=eq.'+di+'&shift_id=eq.'+sid); }catch(e){ console.error('clear slot before assign',e); }
+    ST.sched[k]=[];
     var res=await sbPost('assignments',{week_offset:wk,mode:mode,plaza:plaza,day_index:di,shift_id:sid,emp_id:emp.id,emp_name:emp.name});
     ST.sched[k].push({empId:emp.id,empName:emp.name,aId:res[0].id});
     var sh=ST.pshifts[mode][plaza].find(s=>s.id===sid);
@@ -1873,12 +1883,14 @@ function buildDayCol(plaza,wk,mode,di,date,psh,canEd){
     if(canceled){
       body=`<div class="ssb-double">⏩ כפולה${canEd?` <button class="rmv" style="opacity:1;color:#fff;" onclick="toggleCancelShift(${wk},'${mode}','${plaza.key}',${di},'${sh.id}')" title="בטל סימון כפולה">↺</button>`:''}</div>`;
     } else if(assignments.length){
-      var a=assignments[0];
-      var cf=checkConflict(a.empId,wk,di,sh);
-      body=`<div class="ssb-item${cf?' conflict':''}">
-        <span>${cf?'⚠️ ':''}${a.empName}</span>
+      var dup=assignments.length>1;
+      body=assignments.map(function(a){
+        var cf=checkConflict(a.empId,wk,di,sh);
+        return`<div class="ssb-item${cf?' conflict':''}" ${dup?'style="outline:2px solid #dc2626;border-radius:6px;"':''}>
+        <span>${dup?'⚠️ ':''}${cf?'⚠️ ':''}${a.empName}</span>
         ${canEd?`<button class="rmv" onclick="removeA(${wk},'${mode}','${plaza.key}',${di},'${sh.id}',${a.empId})">✕</button>`:''}
       </div>`;
+      }).join('')+(dup&&canEd?`<div style="font-size:9px;color:#dc2626;font-weight:700;text-align:center;padding:2px;">שיבוץ כפול — הסר את המיותר</div>`:'');
     } else {
       body=canEd?`<button class="ssb-add ssb-add-empty" onclick="clickSlot('${plaza.key}','${mode}',${di},'${sh.id}')"
         oncontextmenu="openPickEmp('${plaza.key}','${mode}',${di},'${sh.id}');return false;">⚠️ חסר עובד — שבץ</button>${sh.type==='noon'?`
@@ -2182,7 +2194,7 @@ async function delConsTab(id){try{await sbDel('constraints','id=eq.'+id);ST.cons
 
 // ── EMP VIEW ──
 function renderEmpView(c){
-  var wk=ST.weekOff,dates=weekDates(wk),evMode=ST.empViewMode||'toller';
+  var wk=ST.weekOff,dates=weekDates(wk),evMode=ST.schedMode;
   if(ST.user.role==='shiftManager'&&!ST.published[pubKey(wk,evMode)]){
     c.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;background:#fff;border:1.5px solid var(--border);border-radius:var(--radius);padding:6px 14px;box-shadow:var(--shadow);">
@@ -2191,8 +2203,8 @@ function renderEmpView(c){
       <button class="btn btn-ghost btn-sm" onclick="navWeek(1,'empview')">הבא ▶</button>
     </div>
     <div class="sched-type-bar" style="margin-bottom:8px;">
-      <button class="stype-btn toller${evMode==='toller'?' active':''}" onclick="ST.empViewMode='toller';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M3.2 11.8l1.3-4a2 2 0 0 1 1.9-1.4h7.2a2 2 0 0 1 1.9 1.4l1.3 4M3.2 11.8h13.6v3a.8.8 0 0 1-.8.8h-1.3a.8.8 0 0 1-.8-.8v-.3H6.1v.3a.8.8 0 0 1-.8.8H4a.8.8 0 0 1-.8-.8Z"/><path d="M6 13h.6M13.4 13h.6"/></svg> טולרים</button>
-      <button class="stype-btn patrol${evMode==='patrol'?' active':''}" onclick="ST.empViewMode='patrol';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M10 2.6 4.3 4.6v4.1c0 3.5 2.4 6.1 5.7 7.6 3.3-1.5 5.7-4.1 5.7-7.6V4.6L10 2.6Z"/></svg> סיירים</button>
+      <button class="stype-btn toller${evMode==='toller'?' active':''}" onclick="ST.schedMode='toller';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M3.2 11.8l1.3-4a2 2 0 0 1 1.9-1.4h7.2a2 2 0 0 1 1.9 1.4l1.3 4M3.2 11.8h13.6v3a.8.8 0 0 1-.8.8h-1.3a.8.8 0 0 1-.8-.8v-.3H6.1v.3a.8.8 0 0 1-.8.8H4a.8.8 0 0 1-.8-.8Z"/><path d="M6 13h.6M13.4 13h.6"/></svg> טולרים</button>
+      <button class="stype-btn patrol${evMode==='patrol'?' active':''}" onclick="ST.schedMode='patrol';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M10 2.6 4.3 4.6v4.1c0 3.5 2.4 6.1 5.7 7.6 3.3-1.5 5.7-4.1 5.7-7.6V4.6L10 2.6Z"/></svg> סיירים</button>
     </div>
     <div style="text-align:center;padding:50px;color:var(--muted);">
       <div style="font-size:44px;margin-bottom:12px;">🔒</div>
@@ -2203,7 +2215,7 @@ function renderEmpView(c){
   function isAssigned(emp,mode){
     for(var d=0;d<7;d++)for(var pi=0;pi<PLAZAS.length;pi++){
       var psh=ST.pshifts[mode][PLAZAS[pi].key].filter(s=>!s.dayOnly||s.dayOnlyDi===d);
-      for(var si=0;si<psh.length;si++)if(getA(wk,mode,PLAZAS[pi].key,d,psh[si].id).find(x=>x.empId===emp.id))return true;
+      for(var si=0;si<psh.length;si++)if(!isCanceled(wk,mode,PLAZAS[pi].key,d,psh[si].id)&&getA(wk,mode,PLAZAS[pi].key,d,psh[si].id).find(x=>x.empId===emp.id))return true;
     }return false;
   }
   function buildTable(mode,emps){
@@ -2216,7 +2228,7 @@ function renderEmpView(c){
         PLAZAS.forEach(function(p){
           var psh=ST.pshifts[mode][p.key].filter(s=>!s.dayOnly||s.dayOnlyDi===di);
           psh.forEach(function(shBase){
-            if(getA(wk,mode,p.key,di,shBase.id).find(x=>x.empId===emp.id)){
+            if(!isCanceled(wk,mode,p.key,di,shBase.id)&&getA(wk,mode,p.key,di,shBase.id).find(x=>x.empId===emp.id)){
               var sh=effShift(wk,mode,p.key,shBase);
               var bg=shiftBg(sh),tc=shiftText(sh);
               found.push(`<div class="ev-chip" style="background:${bg};color:${tc};"><span class="ev-chip-shift">${sh.name}</span><span class="ev-chip-name">${p.label.replace('פלאזת ','')}</span><span class="ev-chip-time">${sh.start}–${sh.end}</span></div>`);
@@ -2240,8 +2252,8 @@ function renderEmpView(c){
       <button class="btn btn-ghost btn-sm" onclick="navWeek(1,'empview')">הבא ▶</button>
     </div>
     <div class="sched-type-bar" style="margin-bottom:8px;">
-      <button class="stype-btn toller${evMode==='toller'?' active':''}" onclick="ST.empViewMode='toller';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M3.2 11.8l1.3-4a2 2 0 0 1 1.9-1.4h7.2a2 2 0 0 1 1.9 1.4l1.3 4M3.2 11.8h13.6v3a.8.8 0 0 1-.8.8h-1.3a.8.8 0 0 1-.8-.8v-.3H6.1v.3a.8.8 0 0 1-.8.8H4a.8.8 0 0 1-.8-.8Z"/><path d="M6 13h.6M13.4 13h.6"/></svg> טולרים</button>
-      <button class="stype-btn patrol${evMode==='patrol'?' active':''}" onclick="ST.empViewMode='patrol';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M10 2.6 4.3 4.6v4.1c0 3.5 2.4 6.1 5.7 7.6 3.3-1.5 5.7-4.1 5.7-7.6V4.6L10 2.6Z"/></svg> סיירים</button>
+      <button class="stype-btn toller${evMode==='toller'?' active':''}" onclick="ST.schedMode='toller';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M3.2 11.8l1.3-4a2 2 0 0 1 1.9-1.4h7.2a2 2 0 0 1 1.9 1.4l1.3 4M3.2 11.8h13.6v3a.8.8 0 0 1-.8.8h-1.3a.8.8 0 0 1-.8-.8v-.3H6.1v.3a.8.8 0 0 1-.8.8H4a.8.8 0 0 1-.8-.8Z"/><path d="M6 13h.6M13.4 13h.6"/></svg> טולרים</button>
+      <button class="stype-btn patrol${evMode==='patrol'?' active':''}" onclick="ST.schedMode='patrol';renderTab('empview')"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M10 2.6 4.3 4.6v4.1c0 3.5 2.4 6.1 5.7 7.6 3.3-1.5 5.7-4.1 5.7-7.6V4.6L10 2.6Z"/></svg> סיירים</button>
     </div>
     <div class="ev-scroll">
       ${evMode==='toller'?buildTable('toller',tollers):buildTable('patrol',patrols)}
@@ -2645,12 +2657,22 @@ function buildWarns(wk,filterMode){
 }
 
 // ── MY VIEW ──
+// Background-refresh swap requests and update the incoming banner (used in every My-View state)
+function myviewRefreshBanner(empRec){
+  (async function(){
+    try{ await reloadSwapReqs(); }catch(e){ console.error('myview swap refresh',e); }
+    var el=document.getElementById('incomingReqs');
+    if(el && ST.tab==='myview') el.innerHTML=incomingReqsHTML(empRec,ST.weekOff);
+  })();
+}
 function renderMyView(c){
   var wk=ST.weekOff;
   var empRec=ST.employees.find(e=>e.username===ST.user.username);
+  if(!empRec){c.innerHTML='<div class="empty">לא נמצאת ברשימת העובדים</div>';return;}
   var pubT=ST.published[pubKey(wk,'toller')],pubP=ST.published[pubKey(wk,'patrol')];
   if(!pubT&&!pubP){
-    c.innerHTML=`<div style="text-align:center;padding:48px;color:var(--muted);">
+    c.innerHTML=`<div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
+    <div style="text-align:center;padding:48px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
         <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
@@ -2658,9 +2680,9 @@ function renderMyView(c){
       </div>
       <div style="font-size:40px;margin-bottom:10px;">🔒</div>
       <div style="font-weight:700;">הסידור טרם פורסם</div>
-    </div>`;return;
+    </div>`;
+    myviewRefreshBanner(empRec);return;
   }
-  if(!empRec){c.innerHTML='<div class="empty">לא נמצאת ברשימת העובדים</div>';return;}
   var dates=weekDates(wk),myShifts=[];
   dates.forEach(function(_,di){
     ['toller','patrol'].forEach(function(mode){
@@ -2675,14 +2697,16 @@ function renderMyView(c){
     });
   });
   if(!myShifts.length){
-    c.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted);">
+    c.innerHTML=`<div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
+    <div style="text-align:center;padding:40px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
         <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
         <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
       </div>
       <div style="font-size:32px;">😔</div><div style="margin-top:8px;font-weight:700;">אין משמרות לשבוע זה</div>
-    </div>`;return;
+    </div>`;
+    myviewRefreshBanner(empRec);return;
   }
   var cards=myShifts.map(function(ms,idx){
     var bg=shiftBg(ms.sh),tc=shiftText(ms.sh);
@@ -2705,6 +2729,7 @@ function renderMyView(c){
     <div id="myEvents">${myEventsHTML(empRec,wk)}</div>
     <div id="myShiftCards">${cards}</div>`;
   window._myShifts=myShifts;window._myEmp=empRec;
+  myviewRefreshBanner(empRec);
 }
 
 // Events + meeting pulses for this employee in the shown week
@@ -2738,7 +2763,7 @@ function myEventsHTML(empRec,wk){
 // Requests waiting for THIS employee to approve (they are the "to" side, status pending_peer)
 function incomingReqsHTML(empRec,wk){
   if(!empRec)return'';
-  var mine=(ST.swapReqs||[]).filter(r=>r.toId===empRec.id&&r.status==='pending_peer'&&r.aWk===wk);
+  var mine=(ST.swapReqs||[]).filter(r=>r.toId===empRec.id&&r.status==='pending_peer');
   if(!mine.length)return'';
   return `<div style="margin-bottom:16px;border:2px solid var(--mp-maroon);border-radius:14px;padding:14px 16px;background:rgba(255,255,255,0.5);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);">
     <div style="font-weight:900;font-size:15px;color:var(--mp-maroon);margin-bottom:10px;">🔔 בקשות שממתינות לאישורך (${mine.length})</div>
