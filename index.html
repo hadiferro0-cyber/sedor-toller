@@ -1174,9 +1174,11 @@ async function reloadEvents(){
   try{var evs=await sbGet('events','select=*&order=created_at.desc');ST.events=evs.map(mapEvent);}catch(e){console.error(e);}
 }
 function mapPulse(r){
+  var d=null; try{ d=r.data?JSON.parse(r.data):null; }catch(e){ d=null; }
   return {id:r.id,weekOff:r.week_off,di:r.di,date:r.ev_date,mode:r.mode,p1time:r.p1_time,p2time:r.p2_time,title:r.title||'ישיבת מחלקה',
     p1Ids:(r.p1_emp_ids||'').split(',').filter(Boolean).map(Number),
-    p2Ids:(r.p2_emp_ids||'').split(',').filter(Boolean).map(Number)};
+    p2Ids:(r.p2_emp_ids||'').split(',').filter(Boolean).map(Number),
+    p1Data:(d&&d.p1)?d.p1:null, p2Data:(d&&d.p2)?d.p2:null};
 }
 async function reloadPulses(){
   try{var pls=await sbGet('meeting_pulses','select=*&order=created_at.desc');ST.pulses=pls.map(mapPulse);}catch(e){console.error(e);}
@@ -3354,16 +3356,23 @@ function publishedPulsesHTML(){
   </div>`;
 }
 
-// Load a published pulse back into the editor to recompute/republish
+// Load a published pulse back into the editor to view / adjust / republish
 function editPulse(id){
   var pl=(ST.pulses||[]).find(x=>x.id===id); if(!pl)return;
   _meetTab='pulses';
   _meetWk=pl.weekOff; _meetDi=pl.di; _meetMode=pl.mode;
   _meetP1=pl.p1time; _meetP2=pl.p2time; _meetTitle=pl.title||'ישיבת מחלקה';
-  _meetResult=null;
-  renderTab('meetings');
-  // auto-run the split so admin sees current division, then can re-publish
-  setTimeout(function(){ try{computeMeetings();}catch(e){} },60);
+  if(pl.p1Data&&pl.p2Data){
+    // Restore the SAVED division (keeps any manual moves), don't auto-divide again
+    function rebuild(list){return list.map(function(o){var e=ST.employees.find(x=>x.id===o.id)||{id:o.id,name:o.name,type:'both'};return {emp:e,note:(o.note!=null?o.note:'')};});}
+    _meetResult={p1:rebuild(pl.p1Data),p2:rebuild(pl.p2Data),di:pl.di,wk:pl.weekOff,p1time:pl.p1time,p2time:pl.p2time,mode:pl.mode,title:pl.title||'ישיבת מחלקה'};
+    renderTab('meetings');
+  } else {
+    // Older record without a saved division → recompute the auto split
+    _meetResult=null;
+    renderTab('meetings');
+    setTimeout(function(){ try{computeMeetings();}catch(e){} },60);
+  }
 }
 async function delPulse(id){
   var pl=(ST.pulses||[]).find(x=>x.id===id); if(!pl)return;
@@ -3434,6 +3443,38 @@ function shiftNote(sh,nightY){
   return '';
 }
 
+// Rest hours between an emp's night shift (that ended the morning of day di) and a pulse time on day di.
+// Returns null if the employee did NOT work a night the previous day.
+function postNightRestGap(emp,wk,di,pulseTime){
+  var nights=dayShifts(emp,wk,di-1).filter(s=>s.type==='night');
+  if(!nights.length)return null;
+  var nightEnd=Math.max.apply(null,nights.map(shiftEndMin)); // minutes from di-1 midnight (night already +1440)
+  var ph=(pulseTime||'00:00').split(':').map(Number);
+  var pulseRel=1440+ph[0]*60+ph[1];
+  return (pulseRel-nightEnd)/60;
+}
+// Manually move an employee to the OTHER pulse (override the auto-division).
+// Warns if the employee worked a night and the target pulse leaves under 8h of rest.
+async function togglePulse(empId){
+  var r=_meetResult; if(!r)return;
+  var from, item, idx=r.p1.findIndex(x=>x.emp.id===empId);
+  if(idx>=0){item=r.p1[idx];from=1;}
+  else{idx=r.p2.findIndex(x=>x.emp.id===empId); if(idx<0)return; item=r.p2[idx]; from=2;}
+  var toPulse=(from===1)?2:1;
+  var targetTime=(toPulse===1)?r.p1time:r.p2time;
+  var gap=postNightRestGap(item.emp,r.wk,r.di,targetTime);
+  if(gap!==null && gap<8){
+    var gp=Math.round(gap*10)/10;
+    var ok=await appConfirm('⚠️ '+item.emp.name+' עבד לילה.\nבין סיום הלילה לפעימה ה'+(toPulse===1?'ראשונה':'שנייה')+' ('+targetTime+') יש כ-'+gp+' שעות מנוחה בלבד — פחות מ-8 שעות.\n\nלשבץ בכל זאת?');
+    if(!ok)return;
+  }
+  (from===1?r.p1:r.p2).splice(idx,1);
+  (toPulse===1?r.p1:r.p2).push(item);
+  var coll=(a,b)=>a.emp.name.localeCompare(b.emp.name,'he');
+  r.p1.sort(coll); r.p2.sort(coll);
+  if(gi('meetResult'))gi('meetResult').innerHTML=meetResultHTML();
+}
+
 function meetResultHTML(){
   var r=_meetResult; if(!r)return '';
   var modeLbl=r.mode==='both'?'טולרים + סיירים':(r.mode==='toller'?'טולרים':'סיירים');
@@ -3446,9 +3487,10 @@ function meetResultHTML(){
         <div style="font-size:12px;opacity:.9;">${list.length} עובדים</div>
       </div>
       <div style="padding:8px 0;">
-        ${list.length?list.map((x,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 16px;${i<list.length-1?'border-bottom:1px solid rgba(0,0,0,0.05);':''}">
-          <span style="font-weight:700;font-size:14px;">${x.emp.name}</span>
-          <span style="font-size:11px;color:var(--muted);background:rgba(0,0,0,0.04);padding:2px 8px;border-radius:10px;">${x.note}</span>
+        ${list.length?list.map((x,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 16px;${i<list.length-1?'border-bottom:1px solid rgba(0,0,0,0.05);':''}">
+          <span style="font-weight:700;font-size:14px;flex:1;min-width:0;">${x.emp.name}</span>
+          <span style="font-size:11px;color:var(--muted);background:rgba(0,0,0,0.04);padding:2px 8px;border-radius:10px;white-space:nowrap;">${x.note}</span>
+          <button onclick="togglePulse(${x.emp.id})" title="העבר לפעימה השנייה" style="border:none;background:rgba(0,0,0,0.07);border-radius:8px;width:30px;height:28px;font-size:15px;cursor:pointer;flex-shrink:0;color:#444;">⇄</button>
         </div>`).join(''):'<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px;">אין עובדים</div>'}
       </div>
     </div>`;
@@ -3463,6 +3505,7 @@ function meetResultHTML(){
       </div>
     </div>
     ${alreadyPub?'<div style="background:#dff5ec;color:#0e7a52;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:700;margin-bottom:12px;">✅ חלוקה זו כבר מפורסמת לעובדים</div>':''}
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">💡 אפשר להעביר עובד בין הפעימות בלחיצה על ⇄</div>
     <div id="meetPrintArea" style="display:flex;gap:14px;flex-wrap:wrap;">
       ${col('פעימה ראשונה',r.p1time,r.p1,'var(--mp-navy)')}
       ${col('פעימה שנייה',r.p2time,r.p2,'var(--mp-maroon)')}
@@ -3476,7 +3519,7 @@ async function publishPulse(){
     week_off:r.wk, di:r.di, ev_date:isoDate(weekDates(r.wk)[r.di]), mode:r.mode,
     p1_time:r.p1time, p2_time:r.p2time, title:r.title||'ישיבת מחלקה',
     p1_emp_ids:p1Ids.join(','), p2_emp_ids:p2Ids.join(','),
-    data:JSON.stringify({p1:r.p1.map(x=>({id:x.emp.id,name:x.emp.name})),p2:r.p2.map(x=>({id:x.emp.id,name:x.emp.name}))})
+    data:JSON.stringify({p1:r.p1.map(x=>({id:x.emp.id,name:x.emp.name,note:x.note})),p2:r.p2.map(x=>({id:x.emp.id,name:x.emp.name,note:x.note}))})
   };
   try{
     // upsert on (week_off,di,mode)
