@@ -1130,9 +1130,10 @@ async function reloadData(){
       sbGet('assignments','select=*'),
       sbGet('constraints','select=*'),
       sbGet('published','select=*'),
-      sbGet('swap_requests','select=*&order=created_at.desc').catch(function(e){console.error('swapReqs reload',e);return [];})
+      sbGet('swap_requests','select=*&order=created_at.desc').catch(function(e){console.error('swapReqs reload',e);return [];}),
+      sbGet('requests','select=*').catch(function(e){console.error('requests reload',e);return null;})
     ]);
-    var assigns=res[0]||[], cons=res[1]||[], pubs=res[2]||[], sreqs=res[3]||[];
+    var assigns=res[0]||[], cons=res[1]||[], pubs=res[2]||[], sreqs=res[3]||[], reqs=res[4];
     ST.sched={};
     assigns.forEach(function(a){
       var k=a.week_offset+'|'+a.mode+'|'+a.plaza+'|'+a.day_index+'|'+a.shift_id;
@@ -1143,6 +1144,7 @@ async function reloadData(){
     ST.published={};
     pubs.forEach(function(p){ST.published[p.week_offset+'|'+p.mode]=true;});
     ST.swapReqs=sreqs.map(mapSwapReq);
+    if(reqs!==null){ST.requests=reqs.map(function(r){return{id:r.id,empId:r.emp_id,empName:r.emp_name,weekOff:r.week_off,data:JSON.parse(r.data||'{}')};});}
   }catch(e){console.error(e);}
 }
 // Re-pull data from Supabase then re-render current tab (used by the refresh button)
@@ -2597,14 +2599,15 @@ async function submitRequest(empId){
   if(reqDeadlinePassed()){await appAlert('🚫 חלון הבקשות נסגר.');return;}
   var emp=ST.employees.find(function(e){return e.id===empId;});
   var data=window._reqDraft||{};
-  var existing=getMyRequest(empId,1);
+  var tw=currentWeekOffset()+1; // requests are for NEXT week (must match the view's lookup)
+  var existing=getMyRequest(empId,tw);
   try{
     if(existing){
       await sbPatch('requests','id=eq.'+existing.id,{data:JSON.stringify(data)});
       existing.data=data;
     }else{
-      var res=await sbPost('requests',{emp_id:empId,emp_name:emp.name,week_off:1,data:JSON.stringify(data)});
-      ST.requests.push({id:res[0].id,empId:empId,empName:emp.name,weekOff:1,data:data});
+      var res=await sbPost('requests',{emp_id:empId,emp_name:emp.name,week_off:tw,data:JSON.stringify(data)});
+      ST.requests.push({id:res[0].id,empId:empId,empName:emp.name,weekOff:tw,data:data});
     }
     await appAlert('✅ הבקשה נשלחה בהצלחה!');
     renderTab('sendreq');
