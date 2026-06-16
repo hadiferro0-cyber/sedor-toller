@@ -656,6 +656,7 @@ input, select, textarea{ background: rgba(255,255,255,0.55) !important; border:1
     <nav id="mainNav"></nav>
     <div class="user-info">
       <span id="headerUser"></span>
+      <button class="logout-btn" id="refreshBtn" onclick="manualRefresh(this)" title="רענן נתונים" style="margin-inline-end:6px;">🔄 רענן</button>
       <button class="logout-btn" id="enableNotifyBtn" onclick="manualEnableNotify()" style="display:none;background:var(--mp-teal);color:#fff;margin-inline-end:6px;">🔔 הפעל התראות</button>
       <button class="logout-btn" onclick="doLogout()">יציאה</button>
     </div>
@@ -1149,6 +1150,21 @@ async function reloadAndRerender(){
   try{ await reloadData(); }catch(e){ console.error('reloadAndRerender',e); }
   if(ST.tab) renderTab(ST.tab);
 }
+// Manual refresh button (header) — pull latest data and re-render current tab
+async function manualRefresh(btn){
+  if(!ST.user)return;
+  var orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='⏳ מרענן…';btn.disabled=true;}
+  try{ await reloadData(); }catch(e){ console.error('manualRefresh',e); }
+  if(ST.tab) renderTab(ST.tab);
+  if(btn){btn.textContent=orig||'🔄 רענן';btn.disabled=false;}
+}
+// Auto-refresh when the app/PWA returns to the foreground (sees other scheduler's changes)
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible' && ST.user){
+    reloadData().then(function(){ if(ST.tab) renderTab(ST.tab); }).catch(function(e){console.error('visibility reload',e);});
+  }
+});
 
 // status: pending_peer | pending_admin | approved | rejected
 function mapSwapReq(r){
@@ -1573,6 +1589,9 @@ function dayShifts(emp,wk,di,excludeKey){
   return res;
 }
 function shiftEndMin(s){var p=s.end.split(':').map(Number),m=p[0]*60+p[1];if(s.type==='night'||(p[0]*60+p[1])<=(s.start.split(':').map(Number)[0]*60))m+=1440;return m;}
+// A shift counts as a "night" if its type is night OR it crosses midnight (e.g. 18:00–06:00 double)
+function crossesMidnight(s){var a=s.start.split(':').map(Number),b=s.end.split(':').map(Number);return (b[0]*60+b[1])<=(a[0]*60+a[1]);}
+function isNightShift(s){return s.type==='night'||crossesMidnight(s);}
 function shiftStartMin(s){var p=s.start.split(':').map(Number);return p[0]*60+p[1];}
 
 // Returns array of violation objects: {rule, reason}
@@ -3181,7 +3200,7 @@ async function delSick(id){
 }
 
 // ── ADMIN: EVENTS / TRAININGS (אירועים והדרכות) ──
-var _evWk=0;
+var _evWk=currentWeekOffset();
 function renderEventsInner(c){
   var wk=_evWk, dates=weekDates(wk);
   var weekEvents=(ST.events||[]).filter(e=>e.weekOff===wk).sort((a,b)=>(a.di-b.di)||(a.time||'').localeCompare(b.time||''));
@@ -3400,27 +3419,30 @@ function computeMeetings(){
   pool.forEach(function(e){
     var today=dayShifts(e,wk,di);            // shifts emp has today
     var yChk=dayShifts(e,wk,di-1);           // yesterday's shifts
-    var workedNightYesterday=yChk.some(s=>s.type==='night');
+    var workedNightYesterday=yChk.some(isNightShift);
+    if(workedNightYesterday){
+      // After a night → second (later) pulse for rest. Applies even if NOT scheduled today.
+      p2.push({emp:e,note:'אחרי לילה'});
+      return;
+    }
     if(!today.length){
-      // not scheduled today → balance later
+      // not scheduled today and no night yesterday → balance later
       unassigned.push(e);
       return;
     }
     // determine by today's (single) shift type
     var sh=today[0];
     var pulse;
-    if(workedNightYesterday){
-      pulse=2; // after a night → second pulse (even if night again today)
-    } else if(sh.type==='morning'){
+    if(sh.type==='morning'){
       pulse=2; // morning → after shift → second
     } else if(sh.type==='noon'){
       pulse=1; // noon → before shift → first
-    } else if(sh.type==='night'){
+    } else if(isNightShift(sh)){
       pulse=1; // night today, no night yesterday → first (before night)
     } else {
       pulse=1;
     }
-    (pulse===1?p1:p2).push({emp:e,note:shiftNote(sh,workedNightYesterday)});
+    (pulse===1?p1:p2).push({emp:e,note:shiftNote(sh,false)});
   });
   // balance the unassigned between pulses to keep sizes similar
   unassigned.forEach(function(e){
@@ -3437,16 +3459,16 @@ function computeMeetings(){
 
 function shiftNote(sh,nightY){
   if(nightY)return 'אחרי לילה';
+  if(isNightShift(sh))return 'לילה';
   if(sh.type==='morning')return 'בוקר';
   if(sh.type==='noon')return 'צהריים';
-  if(sh.type==='night')return 'לילה';
   return '';
 }
 
 // Rest hours between an emp's night shift (that ended the morning of day di) and a pulse time on day di.
 // Returns null if the employee did NOT work a night the previous day.
 function postNightRestGap(emp,wk,di,pulseTime){
-  var nights=dayShifts(emp,wk,di-1).filter(s=>s.type==='night');
+  var nights=dayShifts(emp,wk,di-1).filter(isNightShift);
   if(!nights.length)return null;
   var nightEnd=Math.max.apply(null,nights.map(shiftEndMin)); // minutes from di-1 midnight (night already +1440)
   var ph=(pulseTime||'00:00').split(':').map(Number);
@@ -3529,10 +3551,7 @@ function meetResultHTML(){
             <span style="font-weight:700;font-size:14px;flex:1;min-width:0;">${x.emp.name}</span>
             <span style="font-size:11px;color:var(--muted);background:rgba(0,0,0,0.04);padding:2px 8px;border-radius:10px;white-space:nowrap;">${x.note}</span>
           </div>
-          <div style="display:flex;gap:6px;margin-top:6px;">
-            <button onclick="togglePulse(${x.emp.id})" style="flex:1;border:1px solid var(--glass-stroke);background:rgba(0,0,0,0.03);border-radius:8px;padding:6px;font-size:12px;font-weight:700;cursor:pointer;color:#333;">⇄ העבר ל${pn===1?'פעימה 2':'פעימה 1'}</button>
-            <button onclick="removePulseEmp(${x.emp.id})" title="הסר מהחלוקה" style="border:1px solid #f0b4b4;background:#fef2f2;color:#b91c1c;border-radius:8px;padding:6px 11px;font-size:13px;font-weight:800;cursor:pointer;">✕</button>
-          </div>
+          <button onclick="togglePulse(${x.emp.id})" style="width:100%;margin-top:6px;border:1px solid var(--glass-stroke);background:rgba(0,0,0,0.03);border-radius:8px;padding:6px;font-size:12px;font-weight:700;cursor:pointer;color:#333;">⇄ העבר ל${pn===1?'פעימה 2':'פעימה 1'}</button>
         </div>`).join(''):'<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px;">אין עובדים</div>'}
       </div>
       <div style="padding:10px 14px;border-top:1px solid rgba(0,0,0,0.06);">
@@ -3553,7 +3572,7 @@ function meetResultHTML(){
       </div>
     </div>
     ${alreadyPub?'<div style="background:#dff5ec;color:#0e7a52;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:700;margin-bottom:12px;">✅ חלוקה זו כבר מפורסמת לעובדים</div>':''}
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6;">💡 אפשר לערוך ידנית: <b>"העבר"</b> מעביר לפעימה האחרת · <b>✕</b> מסיר · בתחתית כל פעימה <b>"הוסף עובד"</b>. בסיום לחץ "עדכן/פרסם".</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6;">💡 אפשר לערוך ידנית: <b>"העבר"</b> מעביר עובד לפעימה האחרת · בתחתית כל פעימה אפשר <b>"להוסיף עובד"</b>. בסיום לחץ "עדכן/פרסם".</div>
     <div id="meetPrintArea" style="display:flex;gap:14px;flex-wrap:wrap;">
       ${col('פעימה ראשונה',r.p1time,r.p1,'var(--mp-navy)',1)}
       ${col('פעימה שנייה',r.p2time,r.p2,'var(--mp-maroon)',2)}
