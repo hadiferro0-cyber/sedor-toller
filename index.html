@@ -2721,6 +2721,7 @@ function myviewRefreshBanner(empRec){
     if(el && ST.tab==='myview') el.innerHTML=incomingReqsHTML(empRec,ST.weekOff);
   })();
 }
+var _myMode='toller';
 function renderMyView(c){
   var wk=ST.weekOff;
   var empRec=ST.employees.find(e=>e.username===ST.user.username);
@@ -2764,7 +2765,22 @@ function renderMyView(c){
     </div>`;
     myviewRefreshBanner(empRec);return;
   }
-  var cards=myShifts.map(function(ms,idx){
+  var isBoth=(empRec.type==='both');
+  var nT=myShifts.filter(function(m){return m.mode==='toller';}).length;
+  var nP=myShifts.filter(function(m){return m.mode==='patrol';}).length;
+  var viewMode=_myMode||'toller';
+  if(isBoth){ // auto-show a non-empty tab if the selected one is empty
+    if(viewMode==='toller'&&nT===0&&nP>0)viewMode='patrol';
+    else if(viewMode==='patrol'&&nP===0&&nT>0)viewMode='toller';
+  }
+  var modeTabs=isBoth?`<div style="display:flex;gap:8px;margin-bottom:12px;">
+      <button class="btn btn-sm ${viewMode==='toller'?'btn-primary':'btn-ghost'}" style="flex:1;" onclick="_myMode='toller';renderTab('myview')">טולרים${nT?' ('+nT+')':''}</button>
+      <button class="btn btn-sm ${viewMode==='patrol'?'btn-primary':'btn-ghost'}" style="flex:1;" onclick="_myMode='patrol';renderTab('myview')">סיירים${nP?' ('+nP+')':''}</button>
+    </div>`:'';
+  var shown=myShifts.map(function(ms,idx){return{ms:ms,idx:idx};});
+  if(isBoth)shown=shown.filter(function(o){return o.ms.mode===viewMode;});
+  var cards=shown.map(function(o){
+    var ms=o.ms,idx=o.idx;
     var bg=shiftBg(ms.sh),tc=shiftText(ms.sh);
     return`<div class="my-shift-card" onclick="openMyShiftAction(${idx})">
       <div style="font-size:14px;font-weight:800;">${DAYS[ms.di]} — ${fmtDate(ms.date)}</div>
@@ -2783,6 +2799,7 @@ function renderMyView(c){
     </div>
     <div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
     <div id="myEvents">${myEventsHTML(empRec,wk)}</div>
+    ${modeTabs}
     <div id="myShiftCards">${cards}</div>`;
   window._myShifts=myShifts;window._myEmp=empRec;
   myviewRefreshBanner(empRec);
