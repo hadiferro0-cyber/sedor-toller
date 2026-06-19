@@ -1152,6 +1152,8 @@ async function reloadAndRerender(){
   try{ await reloadData(); }catch(e){ console.error('reloadAndRerender',e); }
   if(ST.tab) renderTab(ST.tab);
 }
+// Employee week navigation in "my shifts" — pull fresh data so a newly-published week shows up
+function myNav(d){ ST.weekOff+=d; reloadAndRerender(); }
 // Manual refresh button (header) — pull latest data and re-render current tab
 async function manualRefresh(btn){
   if(!ST.user)return;
@@ -1881,9 +1883,10 @@ async function navWeek(dir,tab){
     if(target>maxOpenWeek()){await appAlert('שבוע זה טרם נפתח. לחץ "פתח סידור לשבוע נוסף" כדי לפתוח אותו.');return;}
     ST.weekOff=target;renderTab(tab);return;
   }
-  // shiftManager + employees: -2 to +1 only
-  if(target<-2){await appAlert('ניתן לצפות עד שבועיים אחורה בלבד.');return;}
-  if(target>1){await appAlert('ניתן לצפות עד שבוע אחד קדימה בלבד.');return;}
+  // shiftManager + employees: from 2 weeks back to 1 week ahead (relative to the real current week)
+  var cur=currentWeekOffset();
+  if(target<cur-2){await appAlert('ניתן לצפות עד שבועיים אחורה בלבד.');return;}
+  if(target>cur+1){await appAlert('ניתן לצפות עד שבוע אחד קדימה בלבד.');return;}
   ST.weekOff=target;renderTab(tab);
 }
 async function openNewWeek(){
@@ -2731,9 +2734,9 @@ function renderMyView(c){
     c.innerHTML=`<div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
     <div style="text-align:center;padding:48px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(-1)">◀</button>
         <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(1)">▶</button>
       </div>
       <div style="font-size:40px;margin-bottom:10px;">🔒</div>
       <div style="font-weight:700;">הסידור טרם פורסם</div>
@@ -2757,9 +2760,9 @@ function renderMyView(c){
     c.innerHTML=`<div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
     <div style="text-align:center;padding:40px;color:var(--muted);">
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:14px;">
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(-1)">◀</button>
         <span style="font-size:17px;font-weight:900;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<div style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-top:4px;display:inline-block;">✅ שבוע נוכחי</div>':''}
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(1)">▶</button>
       </div>
       <div style="font-size:32px;">😔</div><div style="margin-top:8px;font-weight:700;">אין משמרות לשבוע זה</div>
     </div>`;
@@ -2792,9 +2795,9 @@ function renderMyView(c){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
       <h2 style="font-size:18px;font-weight:800;">המשמרות שלי</h2>
       <div style="display:flex;gap:6px;">
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff--;renderTab('myview')">◀</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(-1)">◀</button>
         <span style="font-size:17px;font-weight:900;padding:5px 8px;">${weekLabelFull(wk)}</span>${wk===currentWeekOffset()?'<span style="background:#059669;color:#fff;font-size:12px;font-weight:800;padding:2px 10px;border-radius:20px;margin-right:6px;">✅ שבוע נוכחי</span>':''}
-        <button class="btn btn-ghost btn-sm" onclick="ST.weekOff++;renderTab('myview')">▶</button>
+        <button class="btn btn-ghost btn-sm" onclick="myNav(1)">▶</button>
       </div>
     </div>
     <div id="incomingReqs">${incomingReqsHTML(empRec,wk)}</div>
