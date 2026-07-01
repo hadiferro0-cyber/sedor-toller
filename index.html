@@ -918,14 +918,15 @@ function shiftText(sh){
   return SHIFT_COLORS[sh.type]?SHIFT_COLORS[sh.type].text:'#374151';
 }
 // Per-week shift time override: returns a shift object with this week's times
-function wsKey(wk,mode,plaza,sid){return wk+'|'+mode+'|'+plaza+'|'+sid;}
-function effShift(wk,mode,plaza,sh){
-  var ov=ST.weekShifts[wsKey(wk,mode,plaza,sh.id)];
+function wsKey(wk,mode,plaza,di,sid){return wk+'|'+mode+'|'+plaza+'|'+di+'|'+sid;}
+function effShift(wk,mode,plaza,di,sh){
+  var ov=ST.weekShifts[wsKey(wk,mode,plaza,di,sh.id)];
+  if(!ov)ov=ST.weekShifts[wk+'|'+mode+'|'+plaza+'|'+sh.id]; // legacy week-level override (pre per-day)
   if(ov){return {id:sh.id,name:sh.name,type:sh.type,start:ov.start,end:ov.end,hours:ov.hours,dayOnly:sh.dayOnly,dayOnlyDi:sh.dayOnlyDi};}
   return sh;
 }
-async function saveWeekShift(wk,mode,plaza,sid,start,end){
-  var k=wsKey(wk,mode,plaza,sid);
+async function saveWeekShift(wk,mode,plaza,di,sid,start,end){
+  var k=wsKey(wk,mode,plaza,di,sid);
   ST.weekShifts[k]={start:start,end:end,hours:calcHours(start,end)};
   try{await sbUpsert('settings',{key:'weekShifts',value:JSON.stringify(ST.weekShifts)},'key');}catch(e){console.error(e);}
 }
@@ -1588,7 +1589,7 @@ function dayShifts(emp,wk,di,excludeKey){
   ['toller','patrol'].forEach(function(mode){PLAZAS.forEach(function(p){ST.pshifts[mode][p.key].forEach(function(s){
     var k=wk+'|'+mode+'|'+p.key+'|'+di+'|'+s.id;
     if(excludeKey&&k===excludeKey)return;
-    if(getA(wk,mode,p.key,di,s.id).find(x=>x.empId===emp.id))res.push(effShift(wk,mode,p.key,s));
+    if(getA(wk,mode,p.key,di,s.id).find(x=>x.empId===emp.id))res.push(effShift(wk,mode,p.key,di,s));
   });})});
   return res;
 }
@@ -1918,12 +1919,12 @@ function buildPlaza(plaza,wk,mode,canEd){
 
 function buildDayCol(plaza,wk,mode,di,date,psh,canEd){
   var slots=psh.map(function(shBase){
-    var sh=effShift(wk,mode,plaza.key,shBase);
+    var sh=effShift(wk,mode,plaza.key,di,shBase);
     var canceled=isCanceled(wk,mode,plaza.key,di,sh.id);
     var assignments=getA(wk,mode,plaza.key,di,sh.id);
     var bg=shiftBg(sh),tc=shiftText(sh);
     var hdr=`<div class="ssh" style="background:${bg};color:${tc};${canceled?'opacity:.4;':''}"
-      onclick="${canEd?`openEditShift('${plaza.key}','${mode}','${sh.id}')`:''}">
+      onclick="${canEd?`openEditShift('${plaza.key}','${mode}',${di},'${sh.id}')`:''}">
       <span>${sh.name}</span><span class="ssh-times">${sh.start}–${sh.end}</span>
       ${canEd?`<span class="ssh-edit"><svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M4 16l1-3.2 8.2-8.2a1.3 1.3 0 0 1 1.9 0l1.3 1.3a1.3 1.3 0 0 1 0 1.9L8.2 16 4 16Z"/><path d="M12.4 4.6 15.4 7.6"/></svg></span>`:''}
     </div>`;
@@ -2077,12 +2078,12 @@ async function saveAddShift(){
 }
 
 // ── EDIT SHIFT ──
-function openEditShift(plaza,mode,sid){
+function openEditShift(plaza,mode,di,sid){
   var base=ST.pshifts[mode][plaza].find(s=>s.id===sid);
   if(!base)return;
-  var sh=effShift(ST.weekOff,mode,plaza,base);
-  ST._editPlaza=plaza;ST._editMode=mode;ST._editSid=sid;ST._editWk=ST.weekOff;
-  gi('modalEditShiftTitle').innerHTML='עריכת משמרת — '+sh.name+'<div style="font-size:11px;color:var(--muted);font-weight:600;margin-top:3px;">⏰ שינוי שעות חל על שבוע זה בלבד · שם/סוג/צבע קבועים</div>';
+  var sh=effShift(ST.weekOff,mode,plaza,di,base);
+  ST._editPlaza=plaza;ST._editMode=mode;ST._editSid=sid;ST._editWk=ST.weekOff;ST._editDi=di;
+  gi('modalEditShiftTitle').innerHTML='עריכת משמרת — '+sh.name+'<div style="font-size:11px;color:var(--muted);font-weight:600;margin-top:3px;">⏰ שינוי שעות חל על '+DAYS[di]+' בשבוע זה בלבד · שם/סוג/צבע קבועים</div>';
   gi('esName').value=base.name;gi('esType').value=base.type;
   gi('esStart').value=sh.start;gi('esEnd').value=sh.end;
   var cur=shiftColorOverride[sid]||shiftBg(base);
@@ -2119,8 +2120,8 @@ async function saveEditShift(){
     arr[i].name=newName;arr[i].type=newType;
     try{
       await sbPatch('shifts','id=eq.'+arr[i].id,{name:newName,type:newType,color:color});
-      await saveWeekShift(ST._editWk,ST._editMode,ST._editPlaza,ST._editSid,newStart,newEnd);
-      logAction('עריכת משמרת',arr[i].name,(ST._editMode==='toller'?'טולרים':'סיירים')+' | '+weekLabel(ST._editWk)+' | שעות: '+newStart+'-'+newEnd);
+      await saveWeekShift(ST._editWk,ST._editMode,ST._editPlaza,ST._editDi,ST._editSid,newStart,newEnd);
+      logAction('עריכת משמרת',arr[i].name,(ST._editMode==='toller'?'טולרים':'סיירים')+' | '+weekLabel(ST._editWk)+' | '+DAYS[ST._editDi]+' | שעות: '+newStart+'-'+newEnd);
       closeModal('modalEditShift');renderTab('sched');
     }catch(e){await appAlert('שגיאה: '+e.message);}
   }
@@ -2294,7 +2295,7 @@ function renderEmpView(c){
           var psh=ST.pshifts[mode][p.key].filter(s=>!s.dayOnly||s.dayOnlyDi===di);
           psh.forEach(function(shBase){
             if(!isCanceled(wk,mode,p.key,di,shBase.id)&&getA(wk,mode,p.key,di,shBase.id).find(x=>x.empId===emp.id)){
-              var sh=effShift(wk,mode,p.key,shBase);
+              var sh=effShift(wk,mode,p.key,di,shBase);
               var bg=shiftBg(sh),tc=shiftText(sh);
               found.push(`<div class="ev-chip" style="background:${bg};color:${tc};"><span class="ev-chip-shift">${sh.name}</span><span class="ev-chip-name">${p.label.replace('פלאזת ','')}</span><span class="ev-chip-time">${sh.start}–${sh.end}</span></div>`);
               total+=sh.hours;
@@ -2751,7 +2752,7 @@ function renderMyView(c){
         var psh=ST.pshifts[mode][p.key].filter(s=>!s.dayOnly||s.dayOnlyDi===di);
         psh.forEach(function(shBase){
           if(getA(wk,mode,p.key,di,shBase.id).find(x=>x.empId===empRec.id))
-            myShifts.push({di,date:dates[di],mode,plaza:p,sh:effShift(wk,mode,p.key,shBase),wk});
+            myShifts.push({di,date:dates[di],mode,plaza:p,sh:effShift(wk,mode,p.key,di,shBase),wk});
         });
       });
     });
