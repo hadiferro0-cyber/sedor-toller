@@ -1738,7 +1738,7 @@ function checkViolations(emp,wk,di,sh,excludeKey){
       // restday_streak: worked the rest window 3+ weeks in a row
       var rsStreak=1;
       for(var rw=1;rw<=8;rw++){ if(worksRestWindow(emp,wk-rw,excludeKey))rsStreak++; else break; }
-      if(rsStreak>=3)v.push({rule:'restday_streak',reason:rsStreak+' שבתונים ברצף'});
+      if(rsStreak>=4)v.push({rule:'restday_streak',reason:rsStreak+' שבתונים ברצף'});
     }
   }
 
@@ -2543,7 +2543,7 @@ var RULE_DEFS=[
   {key:'day_12h',lbl:'מעל 12 שעות ביום',desc:'סך שעות העבודה ביום (כולל כפולה) עולה על 12 שעות'},
   {key:'week_58h',lbl:'מעל 58 שעות בשבוע (לילה)',desc:'שבוע שכולל עבודת לילה עם יותר מ-58 שעות עבודה'},
   {key:'restday',lbl:'שיבוץ ביום שבתון',desc:'עובד משובץ בחלון המנוחה השבועית שלו (24 שעות)'},
-  {key:'restday_streak',lbl:'3 שבתונים ברצף',desc:'עובד עבד בחלון השבתון שלו 3 שבועות רצופים או יותר'},
+  {key:'restday_streak',lbl:'4 שבתונים ברצף',desc:'עובד עבד בחלון השבתון שלו 4 שבועות רצופים או יותר (3 מותר)'},
 ];
 function renderSettings(c){
   var rows=RULE_DEFS.map(function(r){
@@ -2760,7 +2760,7 @@ function renderReqSheet(c){
 }
 
 // ── ALERTS ──
-var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',day_12h:'>12 שעות ביום',week_58h:'>58 שעות בשבוע',restday:'יום שבתון',restday_streak:'3 שבתונים ברצף',constraint:'אילוץ'};
+var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',day_12h:'>12 שעות ביום',week_58h:'>58 שעות בשבוע',restday:'יום שבתון',restday_streak:'4 שבתונים ברצף',constraint:'אילוץ'};
 function buildWarns(wk,filterMode){
   var warns=[];
   var seen={};
