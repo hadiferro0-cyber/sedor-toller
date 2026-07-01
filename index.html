@@ -777,6 +777,9 @@ input, select, textarea{ background: rgba(255,255,255,0.55) !important; border:1
   <div class="fr"><label>תפקיד</label>
     <select id="eRole"><option value="toller">טולר</option><option value="patrol">סייר</option><option value="both">טולר + סייר</option></select>
   </div>
+  <div class="fr"><label>יום שבתון (מנוחה שבועית קבועה)</label>
+    <select id="eRest"><option value="">— ללא —</option><option value="sun">ראשון</option><option value="fri">שישי</option><option value="sat">שבת</option></select>
+  </div>
   <div class="modal-btns">
     <button class="btn btn-ghost btn-sm" onclick="closeModal('modalAddEmp')">ביטול</button>
     <button class="btn btn-primary btn-sm" onclick="saveEmp()">שמור</button>
@@ -985,7 +988,7 @@ var ST={
     },
   },
   sched:{},published:{},cons:[],managers:[],employees:[],
-  rules:{dup_day:'warn',night_morning:'warn',rest_8h:'warn',streak_6:'warn',nights_2wk:'warn',rest_36h:'warn'},
+  rules:{dup_day:'warn',night_morning:'warn',rest_8h:'warn',streak_6:'warn',nights_2wk:'warn',rest_36h:'warn',day_12h:'warn',week_58h:'warn',restday:'warn',restday_streak:'warn'},
   canceled:{},
   weekShifts:{},
   requests:[],
@@ -993,6 +996,8 @@ var ST={
 };
 
 var DAYS=['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+var REST_LBL={sun:'ראשון',fri:'שישי',sat:'שבת'};
+var REST_DI={sun:0,fri:5,sat:6};
 var PLAZAS=[{key:'krayot',label:'פלאזת קריות',cls:'krayot'},{key:'karmel',label:'פלאזת חוף הכרמל',cls:'karmel'}];
 var ROLE_LBL={superAdmin:'מנהל ראשי',scheduler:'אחראי סידור',shiftManager:'מנהל משמרת',employee:'עובד'};
 var TYPE_LBL={toller:'טולר',patrol:'סייר',both:'טולר+סייר'};
@@ -1016,7 +1021,7 @@ async function loadAllData(){
     }
 
     var emps=await sbGet('employees','select=*');
-    ST.employees=emps.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type})));
+    ST.employees=emps.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type,restDay:e.rest_day})));
     if(!ST.employees.length){
       await sbPost('employees',[
         {name:'דני כהן',username:'danny',password:'1234',type:'both'},
@@ -1026,7 +1031,7 @@ async function loadAllData(){
         {name:'רותם שמש',username:'rotem',password:'1234',type:'both'},
       ]);
       var e2=await sbGet('employees','select=*');
-      ST.employees=e2.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type})));
+      ST.employees=e2.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type,restDay:e.rest_day})));
     }
 
     var shifts=await sbGet('shifts','select=*&order=id');
@@ -1245,7 +1250,7 @@ async function doLogin(){
   gi('loginErr').textContent='';
   try{
     var m=await sbGet('managers','select=*');ST.managers=m.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:x.role})));
-    var e=await sbGet('employees','select=*');ST.employees=e.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:'employee',type:x.type})));
+    var e=await sbGet('employees','select=*');ST.employees=e.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:'employee',type:x.type,restDay:x.rest_day})));
   }catch(e){}
   var f=allUsers().find(x=>x.username===u&&x.password===p);
   if(!f){gi('loginErr').textContent='שם משתמש או סיסמה שגויים';return;}
@@ -1616,6 +1621,33 @@ function shiftEndMin(s){var p=s.end.split(':').map(Number),m=p[0]*60+p[1];if(s.t
 function crossesMidnight(s){var a=s.start.split(':').map(Number),b=s.end.split(':').map(Number);return (b[0]*60+b[1])<=(a[0]*60+a[1]);}
 function isNightShift(s){return s.type==='night'||crossesMidnight(s);}
 function shiftStartMin(s){var p=s.start.split(':').map(Number);return p[0]*60+p[1];}
+// Weekly-rest ("שבתון") windows in minutes-from-Sunday-00:00 of the week.
+// sun: prev-Sat 22:00 → Sun 22:00, AND this-Sat 22:00 → next-Sun 22:00 (both edges catch the shift)
+// sat: Fri 18:00 → Sat 18:00 · fri: Thu 18:00 → Fri 18:00
+function restWindows(rd){
+  if(rd==='sun')return [[-120,1320],[9960,11400]];
+  if(rd==='sat')return [[8280,9720]];
+  if(rd==='fri')return [[6840,8280]];
+  return [];
+}
+function shiftWeekInterval(di,sh){
+  var sm=shiftStartMin(sh),p=sh.end.split(':').map(Number),em=p[0]*60+p[1];
+  var start=di*1440+sm, end=di*1440+em; if(em<=sm)end+=1440;
+  return [start,end];
+}
+// does emp have any shift overlapping their rest window in week wk?
+function worksRestWindow(emp,wk,excludeKey){
+  if(!emp.restDay)return false;
+  var wins=restWindows(emp.restDay); if(!wins.length)return false;
+  for(var d=0;d<7;d++){
+    var shs=dayShifts(emp,wk,d,excludeKey);
+    for(var i=0;i<shs.length;i++){
+      var si=shiftWeekInterval(d,shs[i]);
+      for(var wI=0;wI<wins.length;wI++){if(si[0]<wins[wI][1]&&si[1]>wins[wI][0])return true;}
+    }
+  }
+  return false;
+}
 
 // Returns array of violation objects: {rule, reason}
 function checkViolations(emp,wk,di,sh,excludeKey){
@@ -1679,6 +1711,36 @@ function checkViolations(emp,wk,di,sh,excludeKey){
   var workDays=0;
   for(var d3=0;d3<7;d3++){if(dayShifts(emp,wk,d3,excludeKey).length>0)workDays++;}
   if(workDays>=6)v.push({rule:'rest_36h',reason:'פחות מ-36 שעות חופש בשבוע'});
+
+  // day_12h: total work in this day exceeds 12h.
+  // When excludeKey is set (picker), the current slot is excluded from dayShifts → add sh.
+  // When not set (alerts/buildWarns), dayShifts already includes it → don't add again.
+  var dayH=0;
+  dayShifts(emp,wk,di,excludeKey).forEach(function(s){dayH+=(s.hours||0);});
+  if(excludeKey)dayH+=(sh.hours||0);
+  if(dayH>12)v.push({rule:'day_12h',reason:'מעל 12 שעות עבודה ביום'});
+
+  // week_58h: a week that includes night work must not exceed 58h total
+  var weekH=0, hasNight=false;
+  for(var d5=0;d5<7;d5++){
+    dayShifts(emp,wk,d5,excludeKey).forEach(function(s){weekH+=(s.hours||0);if(isNightShift(s))hasNight=true;});
+  }
+  if(excludeKey){weekH+=(sh.hours||0);if(isNightShift(sh))hasNight=true;}
+  if(hasNight&&weekH>58)v.push({rule:'week_58h',reason:'מעל 58 שעות בשבוע עם עבודת לילה'});
+
+  // restday: shift overlaps the employee's protected weekly-rest window (24h)
+  if(emp.restDay){
+    var wins=restWindows(emp.restDay);
+    var si=shiftWeekInterval(di,sh);
+    var inRest=wins.some(function(w){return si[0]<w[1]&&si[1]>w[0];});
+    if(inRest){
+      v.push({rule:'restday',reason:'משובץ ביום השבתון'});
+      // restday_streak: worked the rest window 3+ weeks in a row
+      var rsStreak=1;
+      for(var rw=1;rw<=8;rw++){ if(worksRestWindow(emp,wk-rw,excludeKey))rsStreak++; else break; }
+      if(rsStreak>=3)v.push({rule:'restday_streak',reason:rsStreak+' שבתונים ברצף'});
+    }
+  }
 
   return v;
 }
@@ -2351,7 +2413,7 @@ function renderEmployees(c){
   if(filter!=='all')emps=emps.filter(e=>e.type===filter);
   var rows=emps.map(e=>`<tr>
     <td><b>${e.name}</b></td>
-    <td><span class="badge b-${e.type}">${TYPE_LBL[e.type]}</span></td>
+    <td><span class="badge b-${e.type}">${TYPE_LBL[e.type]}</span>${e.restDay?` <span style="font-size:11px;color:var(--muted);white-space:nowrap;">🛌 ${REST_LBL[e.restDay]}</span>`:''}</td>
     <td dir="ltr">${e.username}</td>
     <td dir="ltr">${e.password}</td>
     <td>
@@ -2378,29 +2440,29 @@ function renderEmployees(c){
 }
 function openAddEmpModal(){
   gi('modalAddEmpTitle').textContent='הוסף עובד';
-  gi('eName').value='';gi('eUser').value='';gi('ePass').value='';gi('eRole').value='toller';
+  gi('eName').value='';gi('eUser').value='';gi('ePass').value='';gi('eRole').value='toller';gi('eRest').value='';
   gi('eName').dataset.editId='';
   openModal('modalAddEmp');
 }
 function openEditEmp(id){
   var emp=ST.employees.find(e=>e.id===id);
   gi('modalAddEmpTitle').textContent='ערוך עובד';
-  gi('eName').value=emp.name;gi('eUser').value=emp.username;gi('ePass').value=emp.password;gi('eRole').value=emp.type;
+  gi('eName').value=emp.name;gi('eUser').value=emp.username;gi('ePass').value=emp.password;gi('eRole').value=emp.type;gi('eRest').value=emp.restDay||'';
   gi('eName').dataset.editId=id;
   openModal('modalAddEmp');
 }
 async function saveEmp(){
-  var n=gv('eName'),u=gv('eUser'),p=gv('ePass'),t=gi('eRole').value;
+  var n=gv('eName'),u=gv('eUser'),p=gv('ePass'),t=gi('eRole').value,rd=gi('eRest').value||null;
   if(!n||!u||!p){await appAlert('מלא את כל השדות');return;}
   var editId=gi('eName').dataset.editId;
   try{
     if(editId){
-      await sbPatch('employees','id=eq.'+editId,{name:n,username:u,password:p,type:t});
+      await sbPatch('employees','id=eq.'+editId,{name:n,username:u,password:p,type:t,rest_day:rd});
       var emp=ST.employees.find(e=>e.id==editId);
-      if(emp){emp.name=n;emp.username=u;emp.password=p;emp.type=t;}
+      if(emp){emp.name=n;emp.username=u;emp.password=p;emp.type=t;emp.restDay=rd;}
     }else{
-      var res=await sbPost('employees',{name:n,username:u,password:p,type:t});
-      ST.employees.push({id:res[0].id,name:n,username:u,password:p,role:'employee',type:t});
+      var res=await sbPost('employees',{name:n,username:u,password:p,type:t,rest_day:rd});
+      ST.employees.push({id:res[0].id,name:n,username:u,password:p,role:'employee',type:t,restDay:rd});
     }
     closeModal('modalAddEmp');renderTab('employees');
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -2478,6 +2540,10 @@ var RULE_DEFS=[
   {key:'streak_6',lbl:'רצף מעל 6 משמרות',desc:'יותר מ-6 ימי עבודה רצופים (כולל שבוע קודם)'},
   {key:'nights_2wk',lbl:'מעל 6 לילות בשבועיים',desc:'יותר מ-6 משמרות לילה בטווח שבועיים'},
   {key:'rest_36h',lbl:'פחות מ-36 שעות חופש',desc:'אין מנוחה רצופה של 36 שעות בשבוע'},
+  {key:'day_12h',lbl:'מעל 12 שעות ביום',desc:'סך שעות העבודה ביום (כולל כפולה) עולה על 12 שעות'},
+  {key:'week_58h',lbl:'מעל 58 שעות בשבוע (לילה)',desc:'שבוע שכולל עבודת לילה עם יותר מ-58 שעות עבודה'},
+  {key:'restday',lbl:'שיבוץ ביום שבתון',desc:'עובד משובץ בחלון המנוחה השבועית שלו (24 שעות)'},
+  {key:'restday_streak',lbl:'3 שבתונים ברצף',desc:'עובד עבד בחלון השבתון שלו 3 שבועות רצופים או יותר'},
 ];
 function renderSettings(c){
   var rows=RULE_DEFS.map(function(r){
@@ -2694,7 +2760,7 @@ function renderReqSheet(c){
 }
 
 // ── ALERTS ──
-var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',constraint:'אילוץ'};
+var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',day_12h:'>12 שעות ביום',week_58h:'>58 שעות בשבוע',restday:'יום שבתון',restday_streak:'3 שבתונים ברצף',constraint:'אילוץ'};
 function buildWarns(wk,filterMode){
   var warns=[];
   var seen={};
@@ -2720,7 +2786,7 @@ function buildWarns(wk,filterMode){
             }
             var blocked=(v.rule!=='constraint'&&ST.rules[v.rule]==='block');
             // Week-level rules describe the whole week → show once per employee (not per shift)
-            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk');
+            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk'||v.rule==='week_58h'||v.rule==='restday_streak');
             var key=emp.id+'|'+v.rule+(weekLevel?'':('|'+di));
             if(seen[key])return;seen[key]=true;
             var ruleLbl=(RULE_LBL_SHORT[v.rule]||v.rule);
