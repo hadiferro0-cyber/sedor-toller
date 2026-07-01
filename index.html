@@ -2786,11 +2786,12 @@ function buildWarns(wk,filterMode){
             }
             var blocked=(v.rule!=='constraint'&&ST.rules[v.rule]==='block');
             // Week-level rules describe the whole week → show once per employee (not per shift)
-            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk'||v.rule==='week_58h'||v.rule==='restday_streak');
+            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk'||v.rule==='week_58h'||v.rule==='restday_streak'||v.rule==='restday');
             var key=emp.id+'|'+v.rule+(weekLevel?'':('|'+di));
             if(seen[key])return;seen[key]=true;
             var ruleLbl=(RULE_LBL_SHORT[v.rule]||v.rule);
             var tag=weekLevel?ruleLbl:(ruleLbl+' · '+DAYS[di]);
+            if(v.rule==='restday'&&emp.restDay)tag=ruleLbl+' · '+(REST_LBL[emp.restDay]||'');
             warns.push({empId:emp.id,empName:emp.name,level:blocked?'danger':'warn',rule:v.rule,tag:tag});
           });
         });
