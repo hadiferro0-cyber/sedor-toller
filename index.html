@@ -638,6 +638,11 @@ input, select, textarea{ background: rgba(255,255,255,0.55) !important; border:1
 </head>
 <body>
 
+<div id="sbErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:#fff;padding:12px 16px;text-align:center;font-weight:800;font-size:14px;line-height:1.5;box-shadow:0 2px 12px rgba(0,0,0,0.35);">
+  ⚠️ החיבור לשרת נכשל — ייתכן שהשינוי לא נשמר. אל תמשיך לעבוד, רענן את הדף (🔄). אם התקלה חוזרת, בדוק ב‑Supabase שלא הופעל RLS.
+  <button onclick="document.getElementById('sbErrorBanner').style.display='none'" style="margin-inline-start:12px;background:rgba(255,255,255,0.25);border:none;color:#fff;border-radius:6px;padding:4px 12px;font-weight:800;cursor:pointer;">סגור</button>
+</div>
+
 <!-- LOGIN -->
 <div id="loginScreen">
   <div class="login-box">
@@ -876,29 +881,42 @@ function sbH(extra){
   if(extra)Object.assign(h,extra);
   return h;
 }
+function showSbBanner(){var b=document.getElementById('sbErrorBanner');if(b)b.style.display='block';}
+function hideSbBanner(){var b=document.getElementById('sbErrorBanner');if(b)b.style.display='none';}
 async function sbGet(t,p){
-  var r=await fetch(SB_URL+'/rest/v1/'+t+(p?'?'+p:''),{method:'GET',headers:sbH(),mode:'cors'});
-  if(!r.ok)throw new Error(await r.text());
-  return r.json();
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/'+t+(p?'?'+p:''),{method:'GET',headers:sbH(),mode:'cors'});
+    if(!r.ok)throw new Error(await r.text());
+    return r.json();
+  }catch(e){showSbBanner();throw e;}
 }
 async function sbPost(t,b){
-  var r=await fetch(SB_URL+'/rest/v1/'+t,{method:'POST',mode:'cors',headers:sbH({'Prefer':'return=representation'}),body:JSON.stringify(b)});
-  if(!r.ok)throw new Error(await r.text());
-  return r.json();
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/'+t,{method:'POST',mode:'cors',headers:sbH({'Prefer':'return=representation'}),body:JSON.stringify(b)});
+    if(!r.ok)throw new Error(await r.text());
+    hideSbBanner();return r.json();
+  }catch(e){showSbBanner();throw e;}
 }
 async function sbDel(t,p){
-  var r=await fetch(SB_URL+'/rest/v1/'+t+'?'+p,{method:'DELETE',mode:'cors',headers:sbH()});
-  if(!r.ok)throw new Error(await r.text());
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/'+t+'?'+p,{method:'DELETE',mode:'cors',headers:sbH()});
+    if(!r.ok)throw new Error(await r.text());
+    hideSbBanner();
+  }catch(e){showSbBanner();throw e;}
 }
 async function sbPatch(t,p,b){
-  var r=await fetch(SB_URL+'/rest/v1/'+t+'?'+p,{method:'PATCH',mode:'cors',headers:sbH({'Prefer':'return=representation'}),body:JSON.stringify(b)});
-  if(!r.ok)throw new Error(await r.text());
-  return r.json();
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/'+t+'?'+p,{method:'PATCH',mode:'cors',headers:sbH({'Prefer':'return=representation'}),body:JSON.stringify(b)});
+    if(!r.ok)throw new Error(await r.text());
+    hideSbBanner();return r.json();
+  }catch(e){showSbBanner();throw e;}
 }
 async function sbUpsert(t,b,oc){
-  var r=await fetch(SB_URL+'/rest/v1/'+t+'?on_conflict='+oc,{method:'POST',mode:'cors',headers:sbH({'Prefer':'resolution=merge-duplicates,return=representation'}),body:JSON.stringify(b)});
-  if(!r.ok)throw new Error(await r.text());
-  return r.json();
+  try{
+    var r=await fetch(SB_URL+'/rest/v1/'+t+'?on_conflict='+oc,{method:'POST',mode:'cors',headers:sbH({'Prefer':'resolution=merge-duplicates,return=representation'}),body:JSON.stringify(b)});
+    if(!r.ok)throw new Error(await r.text());
+    hideSbBanner();return r.json();
+  }catch(e){showSbBanner();throw e;}
 }
 
 // ── COLORS ──
