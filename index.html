@@ -768,6 +768,7 @@ input, select, textarea{ background: rgba(255,255,255,0.55) !important; border:1
 </div>
 </div>
 
+<div class="modal-bg" id="modalRestore"><div class="modal" id="modalRestoreBody"></div></div>
 <div class="modal-bg" id="modalAddEmp">
 <div class="modal">
   <h3 id="modalAddEmpTitle">הוסף עובד</h3>
@@ -1105,6 +1106,8 @@ async function loadAllData(){
       var sreqs=await sbGet('swap_requests','select=*&order=created_at.desc');
       ST.swapReqs=sreqs.map(mapSwapReq);
     }catch(e){console.error('swap_requests load',e);ST.swapReqs=[];}
+
+    try{ await reloadSnapshots(); }catch(e){console.error('snapshots load',e);ST.snapshots=[];}
 
     try{
       var evs=await sbGet('events','select=*&order=created_at.desc');
@@ -1464,7 +1467,7 @@ async function addA(wk,mode,plaza,di,sid,emp){
     ST.sched[k].push({empId:emp.id,empName:emp.name,aId:res[0].id});
     var sh=ST.pshifts[mode][plaza].find(s=>s.id===sid);
     var pl=PLAZAS.find(p=>p.key===plaza);
-    logAction('שיבוץ',emp.name,(mode==='toller'?'טולרים':'סיירים')+' | '+(pl?pl.label.replace('פלאזת ',''):plaza)+' | '+weekLabel(wk)+' | '+DAYS[di]+' | '+(sh?sh.name+' '+sh.start+'-'+sh.end:sid));
+    logAction('שיבוץ',emp.name,(mode==='toller'?'טולרים':'סיירים')+' | '+(pl?pl.label.replace('פלאזת ',''):plaza)+' | '+DAYS[di]+' '+fmtDate(weekDates(wk)[di])+' | '+(sh?sh.name+' '+sh.start+'-'+sh.end:sid));
   }catch(e){console.error(e);await appAlert('שגיאה בשמירה: '+e.message);}
 }
 
@@ -1477,7 +1480,7 @@ async function removeA(wk,mode,plaza,di,sid,empId){
     await sbDel('assignments','id=eq.'+item.aId);
     var sh=ST.pshifts[mode][plaza].find(s=>s.id===sid);
     var pl=PLAZAS.find(p=>p.key===plaza);
-    logAction('הסרת שיבוץ',item.empName,(mode==='toller'?'טולרים':'סיירים')+' | '+(pl?pl.label.replace('פלאזת ',''):plaza)+' | '+weekLabel(wk)+' | '+DAYS[di]+' | '+(sh?sh.name:sid));
+    logAction('הסרת שיבוץ',item.empName,(mode==='toller'?'טולרים':'סיירים')+' | '+(pl?pl.label.replace('פלאזת ',''):plaza)+' | '+DAYS[di]+' '+fmtDate(weekDates(wk)[di])+' | '+(sh?sh.name:sid));
     ST.sched[k]=arr.filter(x=>x.empId!==empId);
     rerenderSchedKeepScroll();
   }catch(e){await appAlert('שגיאה: '+e.message);}
@@ -1554,6 +1557,9 @@ async function setPub(wk,mode,val){
   if(val){try{await sbUpsert('published',{week_offset:wk,mode:mode},'week_offset,mode');}catch(e){console.error(e);}}
   else{try{await sbDel('published','week_offset=eq.'+wk+'&mode=eq.'+mode);}catch(e){console.error(e);}}
   if(val){
+    // snapshot the published schedule as a restore point (admin restore)
+    var isFirst=!(ST.snapshots||[]).some(function(s){return s.weekOff===wk&&s.mode===mode;});
+    try{await saveSnapshot(wk,mode,(isFirst?'פרסום ראשון':'פרסום')+' · '+nowLabel());}catch(e){console.error('snap',e);hideSbBanner();}
     // notify all employees that the schedule was published
     var modeLbl=(mode==='toller'?'טולרים':'סיירים');
     sendNotify({
@@ -1562,6 +1568,86 @@ async function setPub(wk,mode,val){
       message:'סידור ה'+modeLbl+' ל'+weekLabelFull(wk)+' פורסם. היכנס לראות את המשמרות שלך.'
     });
   }
+}
+// ===== Schedule snapshots / restore (superAdmin only) =====
+function nowLabel(){var d=new Date();return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+function snapshotData(wk,mode){
+  var arr=[];
+  Object.keys(ST.sched).forEach(function(k){
+    var p=k.split('|'); // wk|mode|plaza|di|sid
+    if(p[0]==String(wk)&&p[1]===mode){
+      (ST.sched[k]||[]).forEach(function(x){arr.push({plaza:p[2],di:+p[3],sid:p[4],empId:x.empId,empName:x.empName});});
+    }
+  });
+  return arr;
+}
+async function reloadSnapshots(){
+  try{
+    var rows=await sbGet('snapshots','select=id,created_at,week_off,mode,label&order=created_at.desc');
+    ST.snapshots=rows.map(function(r){return{id:r.id,createdAt:r.created_at,weekOff:r.week_off,mode:r.mode,label:r.label};});
+  }catch(e){console.error('snapshots load',e);ST.snapshots=ST.snapshots||[];hideSbBanner();}
+}
+async function saveSnapshot(wk,mode,label){
+  await sbPost('snapshots',{week_off:wk,mode:mode,label:label,data:JSON.stringify(snapshotData(wk,mode))});
+  await reloadSnapshots();
+}
+async function createSnapshot(){
+  if(!ST.user||!isAdmin())return;
+  var wk=ST.weekOff,mode=ST.schedMode;
+  try{
+    await saveSnapshot(wk,mode,'ידני · '+nowLabel());
+    logAction('נקודת שחזור נוצרה','',(mode==='toller'?'טולרים':'סיירים')+' | '+weekLabelFull(wk));
+    await appAlert('📸 נקודת שחזור נשמרה');
+    openRestoreModal();
+  }catch(e){await appAlert('שגיאה: '+e.message);}
+}
+async function restoreSnapshot(id){
+  if(!ST.user||ST.user.role!=='superAdmin'){await appAlert('שחזור מותר למנהל ראשי בלבד.');return;}
+  var snap=(ST.snapshots||[]).find(function(s){return s.id===id;});
+  if(!snap)return;
+  if(!await appConfirm('לשחזר את הסידור למצב:\n"'+snap.label+'"?\n\nכל השינויים שנעשו מאז יימחקו ויוחלפו במצב הזה.'))return;
+  try{
+    var res=await sbGet('snapshots','select=data&id=eq.'+id);
+    var data=JSON.parse((res[0]&&res[0].data)||'[]');
+    var wk=snap.weekOff,mode=snap.mode;
+    await sbDel('assignments','week_offset=eq.'+wk+'&mode=eq.'+mode);
+    if(data.length){
+      var rows=data.map(function(a){return {week_offset:wk,mode:mode,plaza:a.plaza,day_index:a.di,shift_id:a.sid,emp_id:a.empId,emp_name:a.empName};});
+      await sbPost('assignments',rows);
+    }
+    logAction('שחזור סידור','',(mode==='toller'?'טולרים':'סיירים')+' | '+weekLabelFull(wk)+' | אל: '+snap.label);
+    closeModal('modalRestore');
+    await reloadData();
+    renderTab('sched');
+    await appAlert('✅ הסידור שוחזר בהצלחה');
+  }catch(e){await appAlert('שגיאה בשחזור: '+e.message);}
+}
+function openRestoreModal(){
+  if(!ST.user||!isAdmin())return;
+  var isSuper=ST.user.role==='superAdmin';
+  var wk=ST.weekOff,mode=ST.schedMode,modeLbl=(mode==='toller'?'טולרים':'סיירים');
+  var snaps=(ST.snapshots||[]).filter(function(s){return s.weekOff===wk&&s.mode===mode;}).sort(function(a,b){return (b.createdAt||'').localeCompare(a.createdAt||'');});
+  var h='<h3>🕐 נקודות שחזור</h3><div style="font-size:13px;color:var(--muted);margin-bottom:12px;">'+modeLbl+' · '+weekLabelFull(wk)+'</div>';
+  if(isSuper){
+    if(!snaps.length){
+      h+='<p style="font-size:14px;line-height:1.6;">אין עדיין נקודות שחזור לשבוע זה.<br>נקודה נשמרת אוטומטית בכל פרסום, או שאפשר ליצור עכשיו.</p>';
+    }else{
+      var first=snaps[snaps.length-1];
+      h+='<button class="btn btn-danger btn-sm" style="width:100%;margin-bottom:14px;" onclick="restoreSnapshot('+first.id+')">↩️ שחזר לגרסה הראשונה שפורסמה</button>';
+      h+='<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">או בחר נקודת זמן לשחזור:</div>';
+      h+='<div style="max-height:280px;overflow:auto;">'+snaps.map(function(s){
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--glass-stroke);border-radius:10px;margin-bottom:6px;"><span style="font-size:13px;">'+s.label+'</span><button class="btn btn-ghost btn-sm" onclick="restoreSnapshot('+s.id+')">שחזר</button></div>';
+      }).join('')+'</div>';
+    }
+  }else{
+    // scheduler: can create restore points, but NOT restore
+    h+='<p style="font-size:14px;line-height:1.6;">כאן אפשר לשמור נקודת שחזור של הסידור הנוכחי, לפני שינויים.<br><b>השחזור עצמו מתבצע ע"י המנהל הראשי בלבד.</b></p>';
+    if(snaps.length)h+='<div style="font-size:13px;color:var(--muted);margin:8px 0;">קיימות '+snaps.length+' נקודות שמורות לשבוע זה.</div>';
+  }
+  h+='<button class="btn btn-primary btn-sm" style="width:100%;margin-top:12px;" onclick="createSnapshot()">📸 צור נקודת שחזור עכשיו</button>';
+  h+='<div class="modal-btns"><button class="btn btn-ghost btn-sm" onclick="closeModal(\'modalRestore\')">סגור</button></div>';
+  gi('modalRestoreBody').innerHTML=h;
+  openModal('modalRestore');
 }
 
 // Send a push notification via OneSignal REST (through Supabase edge function notify-custom)
@@ -1898,6 +1984,7 @@ function renderSched(c){
         :`<button class="btn btn-success btn-sm" onclick="setPub(${wk},'${mode}',true).then(()=>renderTab('sched'))">פרסם</button>`
       }
       <button class="btn btn-danger btn-sm" onclick="resetWeek(${wk},'${mode}')" title="אפס את כל הסידור בשבוע זה">אפס סידור</button>
+      ${ST.user&&isAdmin()?`<button class="btn btn-ghost btn-sm" onclick="openRestoreModal()" title="נקודות שחזור">${ST.user.role==='superAdmin'?'🕐 שחזור':'📸 נקודת שחזור'}</button>`:''}
     </div>`;
   }
 
@@ -2199,9 +2286,10 @@ async function saveEditShift(){
     // weekly: name/type/color global, times this week only
     arr[i].name=newName;arr[i].type=newType;
     try{
+      var oldEff=effShift(ST._editWk,ST._editMode,ST._editPlaza,ST._editDi,arr[i]);
       await sbPatch('shifts','id=eq.'+arr[i].id,{name:newName,type:newType,color:color});
       await saveWeekShift(ST._editWk,ST._editMode,ST._editPlaza,ST._editDi,ST._editSid,newStart,newEnd);
-      logAction('עריכת משמרת',arr[i].name,(ST._editMode==='toller'?'טולרים':'סיירים')+' | '+weekLabel(ST._editWk)+' | '+DAYS[ST._editDi]+' | שעות: '+newStart+'-'+newEnd);
+      logAction('עריכת משמרת',arr[i].name,(ST._editMode==='toller'?'טולרים':'סיירים')+' | '+DAYS[ST._editDi]+' '+fmtDate(weekDates(ST._editWk)[ST._editDi])+' | שעות: '+oldEff.start+'-'+oldEff.end+' → '+newStart+'-'+newEnd);
       closeModal('modalEditShift');renderTab('sched');
     }catch(e){await appAlert('שגיאה: '+e.message);}
   }
