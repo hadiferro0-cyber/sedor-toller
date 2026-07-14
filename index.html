@@ -989,7 +989,7 @@ var ST={
     },
   },
   sched:{},published:{},cons:[],managers:[],employees:[],
-  rules:{dup_day:'warn',night_morning:'warn',rest_8h:'warn',streak_6:'warn',nights_2wk:'warn',rest_36h:'warn',day_12h:'warn',week_58h:'warn',restday:'warn',restday_streak:'warn'},
+  rules:{dup_day:'warn',night_morning:'warn',rest_8h:'warn',streak_6:'warn',nights_2wk:'warn',rest_36h:'warn',day_12h:'warn',week_58h:'warn',restday_streak:'warn'},
   canceled:{},
   weekShifts:{},
   requests:[],
@@ -1820,8 +1820,8 @@ function checkViolations(emp,wk,di,sh,excludeKey){
     var si=shiftWeekInterval(di,sh);
     var inRest=wins.some(function(w){return si[0]<w[1]&&si[1]>w[0];});
     if(inRest){
-      v.push({rule:'restday',reason:'משובץ ביום השבתון'});
-      // restday_streak: worked the rest window 3+ weeks in a row
+      // (single restday alert removed per request — only the streak below is flagged)
+      // restday_streak: worked the rest window 4+ weeks in a row
       var rsStreak=1;
       for(var rw=1;rw<=8;rw++){ if(worksRestWindow(emp,wk-rw,excludeKey))rsStreak++; else break; }
       if(rsStreak>=4)v.push({rule:'restday_streak',reason:rsStreak+' שבתונים ברצף'});
@@ -1956,7 +1956,7 @@ function renderSched(c){
           onclick="selEmpFn(${e.id})"
           oncontextmenu="openConsModal(${e.id});return false;"
           ontouchstart="lpStart(${e.id})" ontouchend="lpEnd()" ontouchmove="lpEnd()">
-          <div>${e.name}</div><div class="etype">${TYPE_LBL[e.type]}</div>
+          <div>${e.name}</div><div class="etype">${TYPE_LBL[e.type]}${e.restDay?' · 🛌 שבתון '+REST_LBL[e.restDay]:''}</div>
           ${hc?'<div class="cons-dot"></div>':''}
         </div>`;
       }).join('')}</div>
@@ -2630,7 +2630,6 @@ var RULE_DEFS=[
   {key:'rest_36h',lbl:'פחות מ-36 שעות חופש',desc:'אין מנוחה רצופה של 36 שעות בשבוע'},
   {key:'day_12h',lbl:'מעל 12 שעות ביום',desc:'סך שעות העבודה ביום (כולל כפולה) עולה על 12 שעות'},
   {key:'week_58h',lbl:'מעל 58 שעות בשבוע (לילה)',desc:'שבוע שכולל עבודת לילה עם יותר מ-58 שעות עבודה'},
-  {key:'restday',lbl:'שיבוץ ביום שבתון',desc:'עובד משובץ בחלון המנוחה השבועית שלו (24 שעות)'},
   {key:'restday_streak',lbl:'4 שבתונים ברצף',desc:'עובד עבד בחלון השבתון שלו 4 שבועות רצופים או יותר (3 מותר)'},
 ];
 function renderSettings(c){
@@ -2819,7 +2818,7 @@ function renderReqSheet(c){
       var full=[txt,manualTxt].filter(Boolean).join(' · ');
       return`<tr>
         <td style="text-align:center;font-weight:700;">${idx+1}</td>
-        <td style="font-weight:800;white-space:nowrap;">${emp.name}</td>
+        <td style="font-weight:800;white-space:nowrap;">${emp.name}${emp.restDay?`<span style="font-size:11px;color:#7c3aed;font-weight:700;margin-inline-start:6px;">🛌 ${REST_LBL[emp.restDay]}</span>`:''}</td>
         <td style="font-size:13px;">${full||'<span style="color:#cbd5e1;">— לא נשלחו בקשות —</span>'}</td>
         <td></td>
       </tr>`;
@@ -2848,7 +2847,7 @@ function renderReqSheet(c){
 }
 
 // ── ALERTS ──
-var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',day_12h:'>12 שעות ביום',week_58h:'>58 שעות בשבוע',restday:'יום שבתון',restday_streak:'4 שבתונים ברצף',constraint:'אילוץ'};
+var RULE_LBL_SHORT={dup_day:'כפל יומי',night_morning:'בוקר אחרי לילה',rest_8h:'<8 שעות מנוחה',streak_6:'רצף >6',nights_2wk:'>6 לילות בשבועיים',rest_36h:'<36 שעות חופש',day_12h:'>12 שעות ביום',week_58h:'>58 שעות בשבוע',restday_streak:'4 שבתונים ברצף',constraint:'אילוץ'};
 function buildWarns(wk,filterMode){
   var warns=[];
   var seen={};
@@ -2874,12 +2873,11 @@ function buildWarns(wk,filterMode){
             }
             var blocked=(v.rule!=='constraint'&&ST.rules[v.rule]==='block');
             // Week-level rules describe the whole week → show once per employee (not per shift)
-            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk'||v.rule==='week_58h'||v.rule==='restday_streak'||v.rule==='restday');
+            var weekLevel=(v.rule==='rest_36h'||v.rule==='streak_6'||v.rule==='nights_2wk'||v.rule==='week_58h'||v.rule==='restday_streak');
             var key=emp.id+'|'+v.rule+(weekLevel?'':('|'+di));
             if(seen[key])return;seen[key]=true;
             var ruleLbl=(RULE_LBL_SHORT[v.rule]||v.rule);
             var tag=weekLevel?ruleLbl:(ruleLbl+' · '+DAYS[di]);
-            if(v.rule==='restday'&&emp.restDay)tag=ruleLbl+' · '+(REST_LBL[emp.restDay]||'');
             warns.push({empId:emp.id,empName:emp.name,level:blocked?'danger':'warn',rule:v.rule,tag:tag});
           });
         });
