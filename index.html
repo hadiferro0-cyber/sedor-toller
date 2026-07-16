@@ -888,6 +888,21 @@ function sbH(extra){
 }
 function showSbBanner(){var b=document.getElementById('sbErrorBanner');if(b)b.style.display='block';}
 function hideSbBanner(){var b=document.getElementById('sbErrorBanner');if(b)b.style.display='none';}
+// Supabase/PostgREST caps a single request (default 1000 rows). A plain select=* silently
+// returns only the FIRST page — newest rows just vanish. Page through until we have them all.
+async function sbGetAll(t,p){
+  var out=[],page=1000,off=0;
+  var base=p||'';
+  if(base.indexOf('order=')===-1)base=(base?base+'&':'')+'order=id.asc';
+  for(var i=0;i<80;i++){
+    var rows=await sbGet(t,base+'&limit='+page+'&offset='+off);
+    if(!rows||!rows.length)break;
+    out=out.concat(rows);
+    if(rows.length<page)break;
+    off+=page;
+  }
+  return out;
+}
 async function sbGet(t,p){
   try{
     var r=await fetch(SB_URL+'/rest/v1/'+t+(p?'?'+p:''),{method:'GET',headers:sbH(),mode:'cors'});
@@ -1038,7 +1053,7 @@ async function loadAllData(){
       ST.managers=m2.map(m=>(({id:m.id,name:m.name,username:m.username,password:m.password,role:m.role})));
     }
 
-    var emps=await sbGet('employees','select=*');
+    var emps=await sbGetAll('employees','select=*');
     ST.employees=emps.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type,restDay:e.rest_day})));
     if(!ST.employees.length){
       await sbPost('employees',[
@@ -1048,11 +1063,11 @@ async function loadAllData(){
         {name:'אחמד מנסור',username:'ahmad',password:'1234',type:'toller'},
         {name:'רותם שמש',username:'rotem',password:'1234',type:'both'},
       ]);
-      var e2=await sbGet('employees','select=*');
+      var e2=await sbGetAll('employees','select=*');
       ST.employees=e2.map(e=>(({id:e.id,name:e.name,username:e.username,password:e.password,role:'employee',type:e.type,restDay:e.rest_day})));
     }
 
-    var shifts=await sbGet('shifts','select=*&order=id');
+    var shifts=await sbGetAll('shifts','select=*&order=id');
     var uniqueShifts={};
     shifts.forEach(function(s){
       if(!uniqueShifts[s.id])uniqueShifts[s.id]=s;
@@ -1087,7 +1102,7 @@ async function loadAllData(){
       await sbPost('shifts',defs);
     }
 
-    var assigns=await sbGet('assignments','select=*');
+    var assigns=await sbGetAll('assignments','select=*');
     ST.sched={};
     assigns.forEach(function(a){
       var k=a.week_offset+'|'+a.mode+'|'+a.plaza+'|'+a.day_index+'|'+a.shift_id;
@@ -1095,10 +1110,10 @@ async function loadAllData(){
       ST.sched[k].push({empId:a.emp_id,empName:a.emp_name,aId:a.id});
     });
 
-    var cons=await sbGet('constraints','select=*');
+    var cons=await sbGetAll('constraints','select=*');
     ST.cons=cons.map(function(c){return{id:c.id,empId:c.emp_id,empName:c.emp_name,type:c.type,date:c.date};});
 
-    var pubs=await sbGet('published','select=*');
+    var pubs=await sbGetAll('published','select=*');
     ST.published={};
     pubs.forEach(function(p){ST.published[p.week_offset+'|'+p.mode]=true;});
 
@@ -1115,12 +1130,12 @@ async function loadAllData(){
     }catch(e){console.error('settings load',e);}
 
     try{
-      var reqs=await sbGet('requests','select=*');
+      var reqs=await sbGetAll('requests','select=*');
       ST.requests=reqs.map(function(r){return{id:r.id,empId:r.emp_id,empName:r.emp_name,weekOff:r.week_off,data:JSON.parse(r.data||'{}')};});
     }catch(e){console.error('requests load',e);ST.requests=[];}
 
     try{
-      var sreqs=await sbGet('swap_requests','select=*&order=created_at.desc');
+      var sreqs=await sbGetAll('swap_requests','select=*&order=created_at.desc');
       ST.swapReqs=sreqs.map(mapSwapReq);
     }catch(e){console.error('swap_requests load',e);ST.swapReqs=[];}
 
@@ -1171,14 +1186,17 @@ async function reloadData(){
   try{
     // Fetch all tables in PARALLEL instead of one-after-another (much faster load)
     var res=await Promise.all([
-      sbGet('assignments','select=*'),
-      sbGet('constraints','select=*'),
-      sbGet('published','select=*'),
-      sbGet('swap_requests','select=*&order=created_at.desc').catch(function(e){console.error('swapReqs reload',e);return [];}),
-      sbGet('requests','select=*').catch(function(e){console.error('requests reload',e);return null;}),
+      sbGetAll('assignments','select=*'),
+      sbGetAll('constraints','select=*'),
+      sbGetAll('published','select=*'),
+      sbGetAll('swap_requests','select=*&order=created_at.desc').catch(function(e){console.error('swapReqs reload',e);return [];}),
+      sbGetAll('requests','select=*').catch(function(e){console.error('requests reload',e);return null;}),
       sbGet('settings','select=*').catch(function(e){console.error('settings reload',e);return null;})
     ]);
     var assigns=res[0]||[], cons=res[1]||[], pubs=res[2]||[], sreqs=res[3]||[], reqs=res[4], setts=res[5];
+    // SAFETY: never rebuild the schedule from a failed/empty fetch — that would make a full
+    // week look "deleted" on screen while the data is actually still on the server.
+    if(!Array.isArray(res[0])){console.error('reloadData: assignments fetch failed — keeping current data');showSbBanner();return;}
     ST.sched={};
     assigns.forEach(function(a){
       var k=a.week_offset+'|'+a.mode+'|'+a.plaza+'|'+a.day_index+'|'+a.shift_id;
@@ -1243,7 +1261,7 @@ function mapSwapReq(r){
   };
 }
 async function reloadSwapReqs(){
-  try{var sreqs=await sbGet('swap_requests','select=*&order=created_at.desc');ST.swapReqs=sreqs.map(mapSwapReq);}catch(e){console.error(e);}
+  try{var sreqs=await sbGetAll('swap_requests','select=*&order=created_at.desc');ST.swapReqs=sreqs.map(mapSwapReq);}catch(e){console.error(e);}
 }
 function mapEvent(r){
   return {id:r.id,weekOff:r.week_off,date:r.ev_date,di:r.di,time:r.time,title:r.title,
@@ -1285,7 +1303,7 @@ async function doLogin(){
   gi('loginErr').textContent='';
   try{
     var m=await sbGet('managers','select=*');ST.managers=m.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:x.role})));
-    var e=await sbGet('employees','select=*');ST.employees=e.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:'employee',type:x.type,restDay:x.rest_day})));
+    var e=await sbGetAll('employees','select=*');ST.employees=e.map(x=>(({id:x.id,name:x.name,username:x.username,password:x.password,role:'employee',type:x.type,restDay:x.rest_day})));
   }catch(e){}
   var f=allUsers().find(x=>x.username===u&&x.password===p);
   if(!f){gi('loginErr').textContent='שם משתמש או סיסמה שגויים';return;}
