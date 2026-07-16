@@ -661,6 +661,7 @@ input, select, textarea{ background: rgba(255,255,255,0.55) !important; border:1
     <nav id="mainNav"></nav>
     <div class="user-info">
       <span id="headerUser"></span>
+      <button class="logout-btn" id="ckptBtn" onclick="saveCheckpoint(this)" title="ודא שהכול נשמר וצור נקודת שחזור" style="display:none;background:var(--mp-teal);color:#fff;margin-inline-end:6px;">💾 שמור נקודה</button>
       <button class="logout-btn" id="refreshBtn" onclick="manualRefresh(this)" title="רענן נתונים" style="margin-inline-end:6px;">🔄 רענן</button>
       <button class="logout-btn" id="enableNotifyBtn" onclick="manualEnableNotify()" style="display:none;background:var(--mp-teal);color:#fff;margin-inline-end:6px;">🔔 הפעל התראות</button>
       <button class="logout-btn" onclick="doLogout()">יציאה</button>
@@ -947,10 +948,26 @@ function effShift(wk,mode,plaza,di,sh){
   if(ov){return {id:sh.id,name:sh.name,type:sh.type,start:ov.start,end:ov.end,hours:ov.hours,dayOnly:sh.dayOnly,dayOnlyDi:sh.dayOnlyDi};}
   return sh;
 }
+// ── SAFE SETTINGS BLOB WRITE ──
+// weekShifts / canceled / openWeeks are stored as ONE JSON blob each. Writing the whole
+// in-memory object would wipe out changes made by ANOTHER scheduler since we loaded.
+// So: re-read the latest blob, apply only our change, write back, and refresh local state.
+async function settingsPatch(key,mutate,localObj){
+  var latest=null;
+  try{
+    var rows=await sbGet('settings','select=value&key=eq.'+key);
+    if(rows&&rows[0]&&rows[0].value)latest=JSON.parse(rows[0].value);
+  }catch(e){console.error('settingsPatch read',key,e);}
+  if(!latest||typeof latest!=='object')latest=JSON.parse(JSON.stringify(localObj||{}));
+  mutate(latest);
+  await sbUpsert('settings',{key:key,value:JSON.stringify(latest)},'key');
+  return latest;
+}
 async function saveWeekShift(wk,mode,plaza,di,sid,start,end){
   var k=wsKey(wk,mode,plaza,di,sid);
-  ST.weekShifts[k]={start:start,end:end,hours:calcHours(start,end)};
-  try{await sbUpsert('settings',{key:'weekShifts',value:JSON.stringify(ST.weekShifts)},'key');}catch(e){console.error(e);}
+  var val={start:start,end:end,hours:calcHours(start,end)};
+  ST.weekShifts[k]=val;
+  try{ ST.weekShifts=await settingsPatch('weekShifts',function(o){o[k]=val;},ST.weekShifts); }catch(e){console.error(e);}
 }
 
 // ── STATE ──
@@ -1158,9 +1175,10 @@ async function reloadData(){
       sbGet('constraints','select=*'),
       sbGet('published','select=*'),
       sbGet('swap_requests','select=*&order=created_at.desc').catch(function(e){console.error('swapReqs reload',e);return [];}),
-      sbGet('requests','select=*').catch(function(e){console.error('requests reload',e);return null;})
+      sbGet('requests','select=*').catch(function(e){console.error('requests reload',e);return null;}),
+      sbGet('settings','select=*').catch(function(e){console.error('settings reload',e);return null;})
     ]);
-    var assigns=res[0]||[], cons=res[1]||[], pubs=res[2]||[], sreqs=res[3]||[], reqs=res[4];
+    var assigns=res[0]||[], cons=res[1]||[], pubs=res[2]||[], sreqs=res[3]||[], reqs=res[4], setts=res[5];
     ST.sched={};
     assigns.forEach(function(a){
       var k=a.week_offset+'|'+a.mode+'|'+a.plaza+'|'+a.day_index+'|'+a.shift_id;
@@ -1172,6 +1190,20 @@ async function reloadData(){
     pubs.forEach(function(p){ST.published[p.week_offset+'|'+p.mode]=true;});
     ST.swapReqs=sreqs.map(mapSwapReq);
     if(reqs!==null){ST.requests=reqs.map(function(r){return{id:r.id,empId:r.emp_id,empName:r.emp_name,weekOff:r.week_off,data:JSON.parse(r.data||'{}')};});}
+    // Settings blobs must be refreshed too, otherwise a stale copy gets written back
+    // on the next save and wipes another scheduler's hour/כפולה changes.
+    if(setts){
+      try{
+        var rulesRow=setts.find(function(s){return s.key==='rules';});
+        if(rulesRow){Object.assign(ST.rules,JSON.parse(rulesRow.value)||{});}
+        var canRow=setts.find(function(s){return s.key==='canceled';});
+        if(canRow){ST.canceled=JSON.parse(canRow.value)||{};}
+        var wsRow=setts.find(function(s){return s.key==='weekShifts';});
+        if(wsRow){ST.weekShifts=JSON.parse(wsRow.value)||{};}
+        var owRow=setts.find(function(s){return s.key==='openWeeks';});
+        if(owRow){ST.openWeeks=JSON.parse(owRow.value)||{};}
+      }catch(e){console.error('settings reload parse',e);}
+    }
   }catch(e){console.error(e);}
 }
 // Re-pull data from Supabase then re-render current tab (used by the refresh button)
@@ -1303,6 +1335,7 @@ function navIcon(id){var p=NAV_ICONS[id];return p?'<svg viewBox="0 0 20 20" widt
 function buildNav(){
   var u=ST.user;
   gi('headerUser').textContent=u.name+' | '+ROLE_LBL[u.role];
+  var ck=gi('ckptBtn'); if(ck)ck.style.display=(u.role==='superAdmin'||u.role==='scheduler')?'':'none';
   var tabs=[];
   if(u.role!=='employee')tabs.push({id:'sched',lbl:'סידור'});
   if(u.role==='superAdmin')tabs.push({id:'template',lbl:'סידור קבוע'});
@@ -1529,8 +1562,8 @@ async function resetWeek(wk,mode){
     if(parts[0]==String(wk)&&parts[1]===mode){delete ST.canceled[k];changed=true;}
   });
   if(changed){
-    try{await sbUpsert('settings',{key:'weekShifts',value:JSON.stringify(ST.weekShifts)},'key');}catch(e){}
-    try{await sbUpsert('settings',{key:'canceled',value:JSON.stringify(ST.canceled)},'key');}catch(e){}
+    try{ ST.weekShifts=await settingsPatch('weekShifts',function(o){Object.keys(o).forEach(function(k){var p=k.split('|');if(p[0]==String(wk)&&p[1]===mode)delete o[k];});},ST.weekShifts); }catch(e){}
+    try{ ST.canceled=await settingsPatch('canceled',function(o){Object.keys(o).forEach(function(k){var p=k.split('|');if(p[0]==String(wk)&&p[1]===mode)delete o[k];});},ST.canceled); }catch(e){}
   }
   // also unpublish
   if(ST.published[pubKey(wk,mode)]){
@@ -1553,9 +1586,24 @@ async function setPub(wk,mode,val){
       if(!await appConfirm(msg+'\nלפרסם את הסידור בכל זאת?'))return;
     }
   }
+  // Write to the SERVER FIRST — never claim "published" until the server confirmed it.
+  // (Previously the local flag was set first and errors were swallowed, so a failed write
+  //  showed "פורסם" to the scheduler and sent a push, while employees saw nothing.)
+  try{
+    if(val){
+      await sbUpsert('published',{week_offset:wk,mode:mode},'week_offset,mode');
+      var chk=await sbGet('published','select=week_offset&week_offset=eq.'+wk+'&mode=eq.'+mode);
+      if(!chk||!chk.length)throw new Error('הרשומה לא נמצאה בשרת אחרי הפרסום');
+    }else{
+      await sbDel('published','week_offset=eq.'+wk+'&mode=eq.'+mode);
+    }
+  }catch(e){
+    console.error('publish',e);
+    showSbBanner();
+    await appAlert('❌ '+(val?'הפרסום':'ביטול הפרסום')+' נכשל — לא נשמר בשרת!\n\nהעובדים לא יראו את השינוי.\nבדוק את החיבור לאינטרנט ונסה שוב.\n\nפרטים: '+(e.message||''));
+    return;
+  }
   ST.published[pubKey(wk,mode)]=val;
-  if(val){try{await sbUpsert('published',{week_offset:wk,mode:mode},'week_offset,mode');}catch(e){console.error(e);}}
-  else{try{await sbDel('published','week_offset=eq.'+wk+'&mode=eq.'+mode);}catch(e){console.error(e);}}
   if(val){
     // snapshot the published schedule as a restore point (admin restore)
     var isFirst=!(ST.snapshots||[]).some(function(s){return s.weekOff===wk&&s.mode===mode;});
@@ -1590,6 +1638,27 @@ async function reloadSnapshots(){
 async function saveSnapshot(wk,mode,label){
   await sbPost('snapshots',{week_off:wk,mode:mode,label:label,data:JSON.stringify(snapshotData(wk,mode))});
   await reloadSnapshots();
+}
+// Header button: pull the real state from the server (so nothing is stale), then store a
+// restore point. NOTE: the schedule is already saved automatically after every action —
+// this verifies that the server really has it, and marks a point you can come back to.
+async function saveCheckpoint(btn){
+  if(!ST.user||!isAdmin())return;
+  var orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='⏳ שומר…';btn.disabled=true;}
+  var wk=ST.weekOff,mode=ST.schedMode,modeLbl=(mode==='toller'?'טולרים':'סיירים');
+  try{
+    await reloadData();                       // server truth
+    await saveSnapshot(wk,mode,'שמירה ידנית · '+nowLabel());
+    logAction('נקודת שחזור נוצרה','',modeLbl+' | '+weekLabelFull(wk));
+    if(ST.tab)renderTab(ST.tab);
+    await appAlert('✅ הכול שמור בשרת\n📸 נוצרה נקודת שחזור — '+modeLbl+' · '+weekLabelFull(wk)+'\n\n(הסידור נשמר אוטומטית אחרי כל שינוי. הנקודה מאפשרת לחזור בדיוק למצב הזה.)');
+  }catch(e){
+    console.error('checkpoint',e);
+    showSbBanner();
+    await appAlert('❌ לא הצלחתי לאמת שמירה מול השרת.\n\nייתכן שיש בעיית חיבור — אל תמשיך לעבוד עד שתרענן ותוודא.\n\nפרטים: '+(e.message||''));
+  }
+  if(btn){btn.textContent=orig||'💾 שמור נקודה';btn.disabled=false;}
 }
 async function createSnapshot(){
   if(!ST.user||!isAdmin())return;
@@ -2129,7 +2198,8 @@ function cancelKey(wk,mode,plaza,di,sid){return wk+'|'+mode+'|'+plaza+'|'+di+'|'
 function isCanceled(wk,mode,plaza,di,sid){return !!ST.canceled[cancelKey(wk,mode,plaza,di,sid)];}
 async function toggleCancelShift(wk,mode,plaza,di,sid){
   var k=cancelKey(wk,mode,plaza,di,sid);
-  if(ST.canceled[k]){
+  var turningOff=!!ST.canceled[k];
+  if(turningOff){
     delete ST.canceled[k];
   } else {
     // if someone assigned, remove them first
@@ -2143,7 +2213,7 @@ async function toggleCancelShift(wk,mode,plaza,di,sid){
     }
     ST.canceled[k]=true;
   }
-  try{await sbUpsert('settings',{key:'canceled',value:JSON.stringify(ST.canceled)},'key');}catch(e){console.error(e);}
+  try{ ST.canceled=await settingsPatch('canceled',function(o){if(turningOff)delete o[k];else o[k]=true;},ST.canceled); }catch(e){console.error(e);}
   rerenderSchedKeepScroll();
 }
 // Optional note on a "כפולה" slot (e.g. who covers it — "דני, סייר בוקר").
@@ -2158,8 +2228,9 @@ async function editCancelNote(wk,mode,plaza,di,sid){
   var note=await appPrompt('הערה לכפולה — מי עושה אותה (למשל: דני, סייר בוקר):',cancelNote(wk,mode,plaza,di,sid));
   if(note===null)return; // canceled
   note=note.trim();
-  ST.canceled[k]=note?note:true;
-  try{await sbUpsert('settings',{key:'canceled',value:JSON.stringify(ST.canceled)},'key');}catch(e){console.error(e);}
+  var val=note?note:true;
+  ST.canceled[k]=val;
+  try{ ST.canceled=await settingsPatch('canceled',function(o){o[k]=val;},ST.canceled); }catch(e){console.error(e);}
   rerenderSchedKeepScroll();
 }
 
